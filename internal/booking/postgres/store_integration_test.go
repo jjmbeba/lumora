@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/booking"
+	"example.com/cinema-tickets-backend/internal/checkout"
+	"example.com/cinema-tickets-backend/internal/payment"
+	paymentpostgres "example.com/cinema-tickets-backend/internal/payment/postgres"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -186,6 +189,106 @@ func TestGetDetailsReturnsNotFoundForUnknownReference(t *testing.T) {
 	}
 }
 
+func TestCheckoutRetryAfterInitializationFailureReplaysBooking(t *testing.T) {
+	db, bookingStore, fixture := newBookingIntegrationFixture(t)
+	bookingService, err := booking.NewService(bookingStore)
+	if err != nil {
+		t.Fatalf("create booking service: %v", err)
+	}
+	initializationStore, err := paymentpostgres.NewInitializationStore(db)
+	if err != nil {
+		t.Fatalf("create payment initialization store: %v", err)
+	}
+	initializationFailure := errors.New("temporary payment store failure")
+	flakyInitializations := &failFirstInitializationCreator{
+		delegate: initializationStore,
+		err:      initializationFailure,
+	}
+	checkoutService, err := checkout.NewService(bookingService, flakyInitializations)
+	if err != nil {
+		t.Fatalf("create checkout service: %v", err)
+	}
+	request := checkout.StartRequest{
+		Booking: booking.CreateBookingRequest{
+			ScreeningID:      fixture.screeningID,
+			RequestedSeatIDs: []int{fixture.seatIDs[0], fixture.seatIDs[1]},
+			Customer:         booking.CustomerDetails{Email: "checkout@example.test", PhoneNumber: "+254700000000"},
+			IdempotencyKey:   fmt.Sprintf("checkout-integration-%d", bookingIntegrationID.Load()),
+		},
+		PaymentMethod: payment.PaymentMethodCard,
+	}
+
+	if _, err := checkoutService.Start(context.Background(), request); !errors.Is(err, initializationFailure) {
+		t.Fatalf("first Start() error = %v, want temporary initialization failure", err)
+	}
+	var originalReference string
+	var originalHoldExpiresAt time.Time
+	if err := db.QueryRow(`
+		SELECT booking_reference, hold_expires_at
+		FROM bookings
+		WHERE idempotency_key = $1
+	`, request.Booking.IdempotencyKey).Scan(&originalReference, &originalHoldExpiresAt); err != nil {
+		t.Fatalf("load booking committed before initialization failure: %v", err)
+	}
+	var attemptsAfterFailure int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)::int
+		FROM payment_attempts AS attempt
+		JOIN bookings AS booking ON booking.id = attempt.booking_id
+		WHERE booking.booking_reference = $1
+	`, originalReference).Scan(&attemptsAfterFailure); err != nil {
+		t.Fatalf("count payment attempts after simulated failure: %v", err)
+	}
+	if attemptsAfterFailure != 0 {
+		t.Fatalf("payment attempts after simulated pre-store failure = %d, want 0", attemptsAfterFailure)
+	}
+
+	got, err := checkoutService.Start(context.Background(), request)
+	if err != nil {
+		t.Fatalf("retry Start() error = %v", err)
+	}
+	if got.Booking.Reference != originalReference || !got.Booking.HoldExpiresAt.Equal(originalHoldExpiresAt) {
+		t.Errorf("retry booking = %+v, want same reference %q and hold expiry %v", got.Booking, originalReference, originalHoldExpiresAt)
+	}
+	if got.Initialization.Status != payment.InitializationStatusQueued || got.Initialization.PaystackReference == "" {
+		t.Errorf("retry initialization = %+v, want queued initialization with provider reference", got.Initialization)
+	}
+	var bookingCount, initializationCount int
+	if err := db.QueryRow(`
+		SELECT COUNT(*)::int
+		FROM bookings
+		WHERE idempotency_key = $1
+	`, request.Booking.IdempotencyKey).Scan(&bookingCount); err != nil {
+		t.Fatalf("count idempotent bookings: %v", err)
+	}
+	if err := db.QueryRow(`
+		SELECT COUNT(*)::int
+		FROM payment_initializations AS initialization
+		JOIN payment_attempts AS attempt ON attempt.id = initialization.payment_attempt_id
+		JOIN bookings AS booking ON booking.id = attempt.booking_id
+		WHERE booking.booking_reference = $1
+	`, originalReference).Scan(&initializationCount); err != nil {
+		t.Fatalf("count payment initializations: %v", err)
+	}
+	if bookingCount != 1 || initializationCount != 1 {
+		t.Errorf("persisted booking/initialization counts = %d/%d, want 1/1", bookingCount, initializationCount)
+	}
+}
+
+type failFirstInitializationCreator struct {
+	delegate payment.InitializationCreator
+	err      error
+	failed   bool
+}
+
+func (f *failFirstInitializationCreator) CreateOrReplayInitialization(ctx context.Context, request payment.CreateInitializationRequest) (payment.Initialization, error) {
+	if !f.failed {
+		f.failed = true
+		return payment.Initialization{}, f.err
+	}
+	return f.delegate.CreateOrReplayInitialization(ctx, request)
+}
+
 type bookingIntegrationFixture struct {
 	db           *sql.DB
 	store        *PostgresStore
@@ -295,6 +398,15 @@ func (f *bookingIntegrationFixture) seed(t *testing.T) {
 		}{
 			{`DELETE FROM seat_claims WHERE screening_id = $1`, f.screeningID},
 			{`DELETE FROM bookings_seats WHERE screening_id = $1`, f.screeningID},
+			{`DELETE FROM payment_initializations AS initialization
+			 USING payment_attempts AS attempt, bookings AS booking
+			 WHERE initialization.payment_attempt_id = attempt.id
+			   AND attempt.booking_id = booking.id
+			   AND booking.screening_id = $1`, f.screeningID},
+			{`DELETE FROM payment_attempts AS attempt
+			 USING bookings AS booking
+			 WHERE attempt.booking_id = booking.id
+			   AND booking.screening_id = $1`, f.screeningID},
 			{`DELETE FROM bookings WHERE screening_id = $1`, f.screeningID},
 			{`DELETE FROM screening_seats WHERE screening_id = $1`, f.screeningID},
 			{`DELETE FROM screenings WHERE id = $1`, f.screeningID},

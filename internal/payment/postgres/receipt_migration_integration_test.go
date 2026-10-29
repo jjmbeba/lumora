@@ -8,7 +8,7 @@ import (
 )
 
 func TestInitializationReceiptMigration(t *testing.T) {
-	db, _ := integrationStore(t)
+	db := integrationDatabase(t)
 	migration, err := os.ReadFile("../../../migrations/05-payment-initialization-receipts.sql")
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"net/http"
@@ -153,4 +154,21 @@ func newBookingDetailsTestHandler(t *testing.T, store booking.Store, verificatio
 		t.Fatalf("create booking details handler: %v", err)
 	}
 	return handler
+}
+
+type stubBookingStore struct {
+	details      booking.BookingDetails
+	detailsErr   error
+	detailsCalls int
+	detailsRef   string
+}
+
+func (*stubBookingStore) Create(context.Context, booking.CreateBookingParams) (booking.Booking, error) {
+	return booking.Booking{}, nil
+}
+
+func (s *stubBookingStore) GetDetails(_ context.Context, bookingReference string) (booking.BookingDetails, error) {
+	s.detailsCalls++
+	s.detailsRef = bookingReference
+	return s.details, s.detailsErr
 }

@@ -15,9 +15,11 @@ import (
 
 	"example.com/cinema-tickets-backend/internal/booking"
 	"example.com/cinema-tickets-backend/internal/booking/httpapi"
-	"example.com/cinema-tickets-backend/internal/booking/postgres"
+	bookingpostgres "example.com/cinema-tickets-backend/internal/booking/postgres"
+	"example.com/cinema-tickets-backend/internal/checkout"
 	"example.com/cinema-tickets-backend/internal/config"
 	"example.com/cinema-tickets-backend/internal/email/resend"
+	paymentpostgres "example.com/cinema-tickets-backend/internal/payment/postgres"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -82,12 +84,20 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 		return fmt.Errorf("connect to database: %w", err)
 	}
 
-	store, err := postgres.NewPostgresStore(db)
+	store, err := bookingpostgres.NewPostgresStore(db)
+	if err != nil {
+		return err
+	}
+	initializationStore, err := paymentpostgres.NewInitializationStore(db)
 	if err != nil {
 		return err
 	}
 
 	service, err := booking.NewService(store)
+	if err != nil {
+		return err
+	}
+	checkoutService, err := checkout.NewService(service, initializationStore)
 	if err != nil {
 		return err
 	}
@@ -102,7 +112,7 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 		return err
 	}
 
-	bookingHandler, err := httpapi.NewCreateBookingHandler(service)
+	bookingHandler, err := httpapi.NewCreateBookingHandler(checkoutService)
 	if err != nil {
 		return err
 	}

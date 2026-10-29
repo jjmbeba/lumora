@@ -12,20 +12,26 @@ import (
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/booking"
+	"example.com/cinema-tickets-backend/internal/checkout"
+	"example.com/cinema-tickets-backend/internal/payment"
 )
 
-func TestCreateBookingHandlerCreatesBookingAndReturnsJSON(t *testing.T) {
+func TestCreateBookingHandlerStartsBookingAndPayment(t *testing.T) {
 	holdExpiresAt := time.Date(2026, time.October, 26, 12, 30, 0, 0, time.UTC)
-	store := &stubBookingStore{
-		result: booking.Booking{
+	starter := &checkoutStarterFake{result: checkout.StartResult{
+		Booking: booking.Booking{
 			Reference:        "bk_test123",
 			Status:           booking.BookingStatusReserved,
 			TotalAmountMinor: 2500,
 			Currency:         "KES",
 			HoldExpiresAt:    holdExpiresAt,
 		},
-	}
-	handler := newTestCreateBookingHandler(t, store)
+		Initialization: payment.Initialization{
+			Status:        payment.InitializationStatusQueued,
+			PaymentMethod: payment.PaymentMethodCard,
+		},
+	}}
+	handler := newTestCreateBookingHandler(t, starter)
 	request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(validCreateBookingJSON))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "booking-request-123")
@@ -39,36 +45,40 @@ func TestCreateBookingHandlerCreatesBookingAndReturnsJSON(t *testing.T) {
 	if got := response.Header().Get("Content-Type"); got != "application/json" {
 		t.Errorf("Content-Type = %q, want application/json", got)
 	}
-	var got booking.Booking
+	var got struct {
+		Booking booking.Booking `json:"booking"`
+		Payment struct {
+			Status           string `json:"status"`
+			PaymentMethod    string `json:"payment_method"`
+			AuthorizationURL string `json:"authorization_url"`
+		} `json:"payment_initialization"`
+	}
 	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response JSON: %v", err)
 	}
-	if !reflect.DeepEqual(got, store.result) {
-		t.Errorf("response booking = %+v, want %+v", got, store.result)
+	if got.Booking.Reference != "bk_test123" || got.Booking.TotalAmountMinor != 2500 || got.Booking.Currency != "KES" {
+		t.Errorf("response booking = %+v", got.Booking)
 	}
-	if store.calls != 1 {
-		t.Fatalf("store calls = %d, want 1", store.calls)
+	if got.Payment.Status != "QUEUED" || got.Payment.PaymentMethod != "CARD" || got.Payment.AuthorizationURL != "" {
+		t.Errorf("response payment initialization = %+v, want QUEUED CARD with no URL yet", got.Payment)
 	}
-	if store.params.IdempotencyKey != "booking-request-123" {
-		t.Errorf("store idempotency key = %q, want booking-request-123", store.params.IdempotencyKey)
+	if starter.calls != 1 {
+		t.Fatalf("checkout service calls = %d, want 1", starter.calls)
 	}
-	if store.params.ScreeningID != 42 {
-		t.Errorf("store screening ID = %d, want 42", store.params.ScreeningID)
+	if starter.request.Booking.IdempotencyKey != "booking-request-123" || starter.request.Booking.ScreeningID != 42 || starter.request.PaymentMethod != payment.PaymentMethodCard {
+		t.Errorf("checkout request = %+v", starter.request)
 	}
-	if !reflect.DeepEqual(store.params.RequestedSeatIDs, []int{101, 202}) {
-		t.Errorf("store seat IDs = %v, want sorted [101 202]", store.params.RequestedSeatIDs)
+	if !reflect.DeepEqual(starter.request.Booking.RequestedSeatIDs, []int{202, 101}) {
+		t.Errorf("handler seat IDs = %v, want request order preserved for service canonicalization", starter.request.Booking.RequestedSeatIDs)
 	}
-	if store.params.Customer != (booking.CustomerDetails{Email: "person@example.com", PhoneNumber: "+254700000000"}) {
-		t.Errorf("store customer = %+v, want normalized request customer", store.params.Customer)
-	}
-	if store.params.RequestFingerprint == "" {
-		t.Error("store request fingerprint is empty")
+	if starter.request.Booking.Customer != (booking.CustomerDetails{Email: " person@example.com ", PhoneNumber: " +254700000000 "}) {
+		t.Errorf("handler customer = %+v, want raw input for service normalization", starter.request.Booking.Customer)
 	}
 }
 
-func TestCreateBookingHandlerRejectsMalformedJSONBeforeStore(t *testing.T) {
-	store := &stubBookingStore{}
-	handler := newTestCreateBookingHandler(t, store)
+func TestCreateBookingHandlerRejectsMalformedJSONBeforeCheckout(t *testing.T) {
+	starter := &checkoutStarterFake{}
+	handler := newTestCreateBookingHandler(t, starter)
 	request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(`{"screening_id":`))
 	response := httptest.NewRecorder()
 
@@ -77,20 +87,15 @@ func TestCreateBookingHandlerRejectsMalformedJSONBeforeStore(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", response.Code, http.StatusBadRequest)
 	}
-	if store.calls != 0 {
-		t.Errorf("store calls = %d, want 0 for malformed JSON", store.calls)
+	if starter.calls != 0 {
+		t.Errorf("checkout service calls = %d, want 0 for malformed JSON", starter.calls)
 	}
 }
 
-func TestCreateBookingHandlerRejectsInvalidBookingBeforeStore(t *testing.T) {
-	store := &stubBookingStore{}
-	handler := newTestCreateBookingHandler(t, store)
-	request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(`{
-		"screening_id": 0,
-		"requested_seat_ids": [101],
-		"customer": {"email": "person@example.com", "phone_number": "+254700000000"}
-	}`))
-	request.Header.Set("Idempotency-Key", "booking-request-123")
+func TestCreateBookingHandlerRejectsInvalidPaymentMethodBeforeCheckout(t *testing.T) {
+	starter := &checkoutStarterFake{}
+	handler := newTestCreateBookingHandler(t, starter)
+	request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(strings.Replace(validCreateBookingJSON, `"CARD"`, `"BITCOIN"`, 1)))
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -98,38 +103,30 @@ func TestCreateBookingHandlerRejectsInvalidBookingBeforeStore(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want %d", response.Code, http.StatusBadRequest)
 	}
-	if store.calls != 0 {
-		t.Errorf("store calls = %d, want 0 for invalid booking", store.calls)
+	if starter.calls != 0 {
+		t.Errorf("checkout service calls = %d, want 0 for invalid payment method", starter.calls)
 	}
 }
 
-func TestCreateBookingHandlerMapsBookingErrors(t *testing.T) {
+func TestCreateBookingHandlerMapsCheckoutErrors(t *testing.T) {
 	tests := []struct {
 		name       string
-		storeErr   error
+		err        error
 		wantStatus int
 	}{
-		{
-			name:       "seats unavailable",
-			storeErr:   booking.ErrSeatsUnavailable,
-			wantStatus: http.StatusConflict,
-		},
-		{
-			name:       "idempotency key conflict",
-			storeErr:   booking.ErrIdempotencyKeyConflict,
-			wantStatus: http.StatusConflict,
-		},
-		{
-			name:       "unexpected store failure",
-			storeErr:   errors.New("database unavailable"),
-			wantStatus: http.StatusInternalServerError,
-		},
+		{name: "invalid booking", err: booking.ErrInvalidRequest, wantStatus: http.StatusBadRequest},
+		{name: "seat conflict", err: booking.ErrSeatsUnavailable, wantStatus: http.StatusConflict},
+		{name: "booking idempotency conflict", err: booking.ErrIdempotencyKeyConflict, wantStatus: http.StatusConflict},
+		{name: "initialization idempotency conflict", err: payment.ErrInitializationIdempotencyConflict, wantStatus: http.StatusConflict},
+		{name: "booking not eligible", err: payment.ErrBookingNotEligibleForPayment, wantStatus: http.StatusConflict},
+		{name: "booking not found", err: payment.ErrBookingNotFound, wantStatus: http.StatusNotFound},
+		{name: "unexpected failure", err: errors.New("database unavailable"), wantStatus: http.StatusInternalServerError},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			store := &stubBookingStore{err: test.storeErr}
-			handler := newTestCreateBookingHandler(t, store)
+			starter := &checkoutStarterFake{err: test.err}
+			handler := newTestCreateBookingHandler(t, starter)
 			request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(validCreateBookingJSON))
 			request.Header.Set("Idempotency-Key", "booking-request-123")
 			response := httptest.NewRecorder()
@@ -139,16 +136,16 @@ func TestCreateBookingHandlerMapsBookingErrors(t *testing.T) {
 			if response.Code != test.wantStatus {
 				t.Errorf("status = %d, want %d; body = %s", response.Code, test.wantStatus, response.Body)
 			}
-			if store.calls != 1 {
-				t.Errorf("store calls = %d, want 1", store.calls)
+			if starter.calls != 1 {
+				t.Errorf("checkout service calls = %d, want 1", starter.calls)
 			}
 		})
 	}
 }
 
 func TestCreateBookingHandlerRejectsUnsupportedMethod(t *testing.T) {
-	store := &stubBookingStore{}
-	handler := newTestCreateBookingHandler(t, store)
+	starter := &checkoutStarterFake{}
+	handler := newTestCreateBookingHandler(t, starter)
 	request := httptest.NewRequest(http.MethodGet, "/bookings", nil)
 	response := httptest.NewRecorder()
 
@@ -160,8 +157,8 @@ func TestCreateBookingHandlerRejectsUnsupportedMethod(t *testing.T) {
 	if got := response.Header().Get("Allow"); got != http.MethodPost {
 		t.Errorf("Allow = %q, want POST", got)
 	}
-	if store.calls != 0 {
-		t.Errorf("store calls = %d, want 0 for unsupported method", store.calls)
+	if starter.calls != 0 {
+		t.Errorf("checkout service calls = %d, want 0 for unsupported method", starter.calls)
 	}
 }
 
@@ -171,41 +168,28 @@ const validCreateBookingJSON = `{
 	"customer": {
 		"email": " person@example.com ",
 		"phone_number": " +254700000000 "
-	}
+	},
+	"payment_method": "CARD"
 }`
 
-type stubBookingStore struct {
-	result       booking.Booking
-	details      booking.BookingDetails
-	err          error
-	detailsErr   error
-	calls        int
-	detailsCalls int
-	detailsRef   string
-	params       booking.CreateBookingParams
+type checkoutStarterFake struct {
+	result  checkout.StartResult
+	err     error
+	calls   int
+	request checkout.StartRequest
 }
 
-func (s *stubBookingStore) Create(_ context.Context, params booking.CreateBookingParams) (booking.Booking, error) {
-	s.calls++
-	s.params = params
-	return s.result, s.err
+func (f *checkoutStarterFake) Start(_ context.Context, request checkout.StartRequest) (checkout.StartResult, error) {
+	f.calls++
+	f.request = request
+	return f.result, f.err
 }
 
-func (s *stubBookingStore) GetDetails(_ context.Context, bookingReference string) (booking.BookingDetails, error) {
-	s.detailsCalls++
-	s.detailsRef = bookingReference
-	return s.details, s.detailsErr
-}
-
-func newTestCreateBookingHandler(t *testing.T, store booking.Store) *CreateBookingHandler {
+func newTestCreateBookingHandler(t *testing.T, starter checkout.Starter) *CreateBookingHandler {
 	t.Helper()
-	service, err := booking.NewService(store)
+	handler, err := NewCreateBookingHandler(starter)
 	if err != nil {
-		t.Fatalf("create booking service: %v", err)
-	}
-	handler, err := NewCreateBookingHandler(service)
-	if err != nil {
-		t.Fatalf("create HTTP handler: %v", err)
+		t.Fatalf("create booking HTTP handler: %v", err)
 	}
 	return handler
 }

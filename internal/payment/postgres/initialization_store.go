@@ -13,7 +13,21 @@ import (
 	"example.com/cinema-tickets-backend/internal/payment"
 )
 
-func (p *PostgresStore) CreateOrReplayInitialization(ctx context.Context, request payment.CreateInitializationRequest) (payment.Initialization, error) {
+type InitializationStore struct {
+	db *sql.DB
+}
+
+var _ payment.InitializationCreator = (*InitializationStore)(nil)
+
+func NewInitializationStore(db *sql.DB) (*InitializationStore, error) {
+	if db == nil {
+		return nil, errors.New("database pool is required")
+	}
+
+	return &InitializationStore{db: db}, nil
+}
+
+func (p *InitializationStore) CreateOrReplayInitialization(ctx context.Context, request payment.CreateInitializationRequest) (payment.Initialization, error) {
 	request.BookingReference = strings.TrimSpace(request.BookingReference)
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	request.RequestFingerprint = strings.TrimSpace(request.RequestFingerprint)
@@ -37,7 +51,7 @@ func (p *PostgresStore) CreateOrReplayInitialization(ctx context.Context, reques
 
 var errInitializationReceiptConflict = errors.New("initialization receipt concurrently created")
 
-func (p *PostgresStore) createOrReplayInitialization(ctx context.Context, request payment.CreateInitializationRequest) (payment.Initialization, error) {
+func (p *InitializationStore) createOrReplayInitialization(ctx context.Context, request payment.CreateInitializationRequest) (payment.Initialization, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return payment.Initialization{}, fmt.Errorf("begin create payment initialization transaction: %w", err)
