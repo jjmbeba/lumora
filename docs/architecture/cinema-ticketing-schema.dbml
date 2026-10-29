@@ -1,0 +1,219 @@
+// Cinema ticketing backend: first-pass logical schema.
+// DBML documentation: https://dbml.dbdiagram.io/docs
+
+enum BookingStatus {
+  RESERVED
+  PAYMENT_REVIEW
+  BOOKED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CARD
+  MPESA
+}
+
+enum PaymentInitializationStatus {
+  QUEUED [note: 'Committed and waiting for a worker to contact Paystack']
+  SUBMITTING [note: 'A worker has claimed this initialization and is contacting Paystack']
+  READY [note: 'Paystack created checkout; authorization_url is stored']
+  FAILED [note: 'Paystack verification confirmed the payment attempt failed']
+  REJECTED [note: 'Paystack definitively confirmed that no checkout was created']
+  UNKNOWN [note: 'Paystack outcome is uncertain; reconcile by reference before another initialization']
+  CANCELLED [note: 'Payment attempt was explicitly cancelled; Paystack abandoned remains pending while the booking hold is valid']
+  REVIEW_REQUIRED [note: 'Payment state conflicts with provider verification; excluded from worker claims pending review']
+}
+
+Table auditoriums {
+  id integer [primary key]
+  name varchar [not null]
+  created_at timestamp [not null]
+}
+
+Table movies {
+  id integer [primary key]
+  name varchar [not null]
+  description varchar [not null]
+  runtime_minutes integer [not null]
+  created_at timestamp [not null]
+
+  checks {
+    `runtime_minutes > 0` [name: 'movies_runtime_positive']
+  }
+}
+
+Table screenings {
+  id integer [primary key]
+  movie_id integer [ref: > movies.id, not null]
+  auditorium_id integer [ref: > auditoriums.id, not null]
+  currency varchar(3) [not null, note: 'All seat prices for this screening use this currency']
+  start_time datetime [not null]
+  end_time datetime [not null]
+  created_at timestamp [not null]
+
+  indexes {
+    (id, auditorium_id) [unique]
+    (id, currency) [unique]
+  }
+
+  checks {
+    `end_time > start_time` [name: 'screenings_end_after_start']
+  }
+}
+
+Table seats {
+  id integer [primary key]
+  label varchar [not null]
+  auditorium_id integer [ref: > auditoriums.id, not null]
+  created_at timestamp [not null]
+
+  indexes {
+    (id, auditorium_id) [unique]
+    (auditorium_id, label) [unique]
+  }
+}
+
+// One row for each seat offered in a screening, with that screening's price.
+Table screening_seats {
+  screening_id integer [not null]
+  seat_id integer [not null]
+  auditorium_id integer [not null]
+  price_amount integer [not null, note: 'Stored in minor currency units']
+
+  indexes {
+    (screening_id, seat_id) [pk]
+  }
+
+  checks {
+    `price_amount > 0` [name: 'screening_seats_price_positive']
+  }
+}
+
+Table bookings {
+  id integer [primary key]
+  booking_reference varchar [unique, not null]
+  idempotency_key varchar [not null, unique]
+  request_fingerprint varchar [not null, note: 'Compared on idempotency replay; not unique']
+  customer_email varchar [not null]
+  customer_phone varchar [not null]
+  status BookingStatus [not null]
+  screening_id integer [ref: > screenings.id, not null]
+  hold_expires_at datetime [not null]
+  created_at timestamp [not null]
+
+  indexes {
+    (id, screening_id) [unique]
+  }
+
+  checks {
+    `hold_expires_at > created_at` [name: 'bookings_hold_expires_after_creation']
+  }
+}
+
+Table payment_attempts {
+  id integer [primary key]
+  booking_id integer [ref: - bookings.id, not null, unique]
+  status PaymentStatus [not null]
+  amount integer [not null, note: 'Stored in minor currency units']
+  currency varchar(3) [not null, note: 'Three-letter currency code, e.g. KES']
+  created_at timestamp [not null]
+
+  checks {
+    `amount > 0` [name: 'payment_attempts_amount_positive']
+  }
+}
+
+// Each initialization gets its own provider reference.
+// A definitively rejected initialization can be retained as history while a
+// new initialization is created under the same payment attempt.
+Table payment_initializations {
+  id integer [primary key]
+  payment_attempt_id integer [ref: > payment_attempts.id, not null]
+  paystack_reference varchar [unique, not null, note: 'Generated and persisted before calling Paystack']
+  payment_method PaymentMethod [not null]
+  authorization_url varchar [note: 'Nullable until Paystack returns hosted checkout details']
+  status PaymentInitializationStatus [not null]
+  rejection_reason varchar
+  worker_attempt_count integer [not null, default: 0, note: 'Incremented whenever a worker claims this job']
+  next_attempt_at timestamp
+  lease_expires_at timestamp [note: 'Allows recovery if a worker crashes while SUBMITTING']
+  created_at timestamp [not null]
+  updated_at timestamp [not null]
+
+  indexes {
+    payment_attempt_id
+  }
+}
+
+// Every accepted request has its own receipt, even when it returns an existing
+// unresolved initialization. The requested method can differ from that initialization's method.
+Table payment_initialization_receipts {
+  idempotency_key varchar [primary key]
+  request_fingerprint varchar [not null]
+  requested_payment_method PaymentMethod [not null]
+  payment_initialization_id integer [ref: > payment_initializations.id, not null]
+  created_at timestamptz [not null, default: `clock_timestamp()`]
+}
+
+// Database-specific partial unique index required in the migration:
+// at most one initialization per payment_attempt_id in QUEUED, SUBMITTING,
+// READY, UNKNOWN, or REVIEW_REQUIRED. REVIEW_REQUIRED remains unresolved but
+// is excluded from worker claims until reviewed. FAILED, REJECTED, and
+// CANCELLED rows remain as terminal history.
+// DBML cannot express this predicate; do not replace it with a plain unique
+// index, which would forbid retries after a definitive rejection.
+
+// Durable history of the seats selected for each booking. Keep these rows
+// when a booking is cancelled so support can see what the customer selected.
+Table bookings_seats {
+  booking_id integer [not null]
+  seat_id integer [not null]
+  screening_id integer [not null]
+  unit_price_amount integer [not null, note: 'Price snapshot in minor currency units']
+  currency varchar(3) [not null, note: 'Currency snapshot for this booking seat']
+
+  indexes {
+    (booking_id, seat_id) [pk]
+  }
+
+  checks {
+    `unit_price_amount > 0` [name: 'bookings_seats_price_positive']
+  }
+}
+
+// Current occupancy only. Keep claims for RESERVED, PAYMENT_REVIEW, and
+// BOOKED bookings; remove claims when a confirmed failure/cancellation
+// releases seats. The historical booking_seats rows remain.
+Table seat_claims {
+  screening_id integer [not null]
+  seat_id integer [not null]
+  booking_id integer [not null]
+
+  indexes {
+    (screening_id, seat_id) [pk]
+  }
+}
+
+// A screening seat must belong to the screening's auditorium and be a seat
+// in that auditorium. This row is the source of the offered seat price.
+Ref: screening_seats.(screening_id, auditorium_id) > screenings.(id, auditorium_id)
+Ref: screening_seats.(seat_id, auditorium_id) > seats.(id, auditorium_id)
+
+// Ensure the historical booking-seat row matches the booking and the offered
+// seat for that screening. Its unit price is a snapshot taken at booking time.
+Ref: bookings_seats.(booking_id, screening_id) > bookings.(id, screening_id)
+Ref: bookings_seats.(screening_id, seat_id) > screening_seats.(screening_id, seat_id)
+Ref: bookings_seats.(screening_id, currency) > screenings.(id, currency)
+
+// Ensure each active claim matches that historical booking-seat row and
+// still belongs to the correct booking and screening.
+Ref: seat_claims.(booking_id, seat_id) > bookings_seats.(booking_id, seat_id)
+Ref: seat_claims.(booking_id, screening_id) > bookings.(id, screening_id)
+Ref: seat_claims.(screening_id, seat_id) > screening_seats.(screening_id, seat_id)
