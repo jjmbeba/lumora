@@ -126,6 +126,10 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 	if err != nil {
 		return err
 	}
+	paymentInitializationHandler, err := httpapi.NewPaymentInitializationStatusHandler(checkoutService, verificationService)
+	if err != nil {
+		return err
+	}
 
 	verificationRateLimiter, err := httpapi.NewEmailVerificationRateLimiter(time.Now)
 	if err != nil {
@@ -135,6 +139,7 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 	mux := http.NewServeMux()
 	mux.Handle("POST /bookings", bookingHandler)
 	mux.Handle("GET /bookings/{reference}", bookingDetailsHandler)
+	mux.Handle("GET /bookings/{reference}/payment-initialization", paymentInitializationHandler)
 
 	if err := httpapi.RegisterEmailVerificationRoutes(mux, emailHandler, verificationRateLimiter); err != nil {
 		return err

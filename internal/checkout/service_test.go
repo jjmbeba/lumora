@@ -146,6 +146,47 @@ func TestStartRejectsInvalidPaymentMethodBeforePersistence(t *testing.T) {
 	}
 }
 
+func TestGetLatestInitializationTrimsBookingReference(t *testing.T) {
+	want := payment.Initialization{
+		ID:                92,
+		Status:            payment.InitializationStatusReady,
+		PaymentMethod:     payment.PaymentMethodMpesa,
+		PaystackReference: "provider-ref",
+		AuthorizationURL:  "https://checkout.example.test/pay",
+	}
+	initializationStore := &initializationCreatorFake{readResult: want}
+	service, err := NewService(&bookingCreatorFake{}, initializationStore)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	got, err := service.GetLatestInitialization(context.Background(), " bk-123 ")
+	if err != nil {
+		t.Fatalf("GetLatestInitialization() error = %v", err)
+	}
+	if got != want {
+		t.Errorf("GetLatestInitialization() = %+v, want %+v", got, want)
+	}
+	if initializationStore.readCalls != 1 || initializationStore.readReference != "bk-123" {
+		t.Errorf("reader calls/reference = %d/%q, want 1/bk-123", initializationStore.readCalls, initializationStore.readReference)
+	}
+}
+
+func TestGetLatestInitializationRejectsEmptyBookingReference(t *testing.T) {
+	initializationStore := &initializationCreatorFake{}
+	service, err := NewService(&bookingCreatorFake{}, initializationStore)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	if _, err := service.GetLatestInitialization(context.Background(), "  "); !errors.Is(err, payment.ErrInvalidInitializationRequest) {
+		t.Fatalf("GetLatestInitialization() error = %v, want invalid initialization request", err)
+	}
+	if initializationStore.readCalls != 0 {
+		t.Errorf("reader calls = %d, want 0 for empty booking reference", initializationStore.readCalls)
+	}
+}
+
 type bookingCreatorFake struct {
 	result      booking.Booking
 	err         error
@@ -162,11 +203,15 @@ func (f *bookingCreatorFake) CreateWithFingerprint(_ context.Context, request bo
 }
 
 type initializationCreatorFake struct {
-	result   payment.Initialization
-	err      error
-	calls    int
-	request  payment.CreateInitializationRequest
-	requests []payment.CreateInitializationRequest
+	result        payment.Initialization
+	err           error
+	calls         int
+	request       payment.CreateInitializationRequest
+	requests      []payment.CreateInitializationRequest
+	readResult    payment.Initialization
+	readErr       error
+	readCalls     int
+	readReference string
 }
 
 func (f *initializationCreatorFake) CreateOrReplayInitialization(_ context.Context, request payment.CreateInitializationRequest) (payment.Initialization, error) {
@@ -174,6 +219,12 @@ func (f *initializationCreatorFake) CreateOrReplayInitialization(_ context.Conte
 	f.request = request
 	f.requests = append(f.requests, request)
 	return f.result, f.err
+}
+
+func (f *initializationCreatorFake) GetLatestForBooking(_ context.Context, bookingReference string) (payment.Initialization, error) {
+	f.readCalls++
+	f.readReference = bookingReference
+	return f.readResult, f.readErr
 }
 
 func validStartRequest(method payment.PaymentMethod) StartRequest {

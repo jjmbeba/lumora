@@ -116,13 +116,13 @@ For a retry on an existing booking, use an operation such as `POST /bookings/{re
 
 **Goal:** bridge the asynchronous worker and the customer UI.
 
-**Likely files:** extend `internal/httpapi` with a read/status handler; add a focused read method to the package that consumes the store; implement it in the payment PostgreSQL adapter; add handler and store tests.
+**Implemented:** `checkout.Service.GetLatestInitialization` reads through its consumer-owned `InitializationReader` contract. `payment/postgres.InitializationStore.GetLatestForBooking` loads the latest initialization for a booking. `GET /bookings/{reference}/payment-initialization` is registered by `cmd/booking-api/main.go` and requires the same booking-scoped bearer token as booking details. It returns the initialization status and payment method, and includes `authorization_url` only after the worker has received one. Focused checkout, HTTP, and PostgreSQL integration tests cover pending and ready responses, authorization, missing initialization, and storage errors.
 
 The initialization may be `QUEUED` or `SUBMITTING` before Paystack returns an authorization URL. Make that pending state explicit in the API contract. Once it becomes `READY`, return the stored authorization URL. Afterward, the same resource should let the client observe payment progress and terminal outcomes without trusting a browser redirect as proof of payment.
 
 Do not make the request wait for the worker or synchronously call Paystack. The existing worker and verified webhook/reconciliation path remain authoritative for payment status.
 
-**Checkpoint:** the customer can refresh or poll after a network interruption and recover the same initialization and checkout URL; a browser redirect alone cannot mark a booking paid.
+**Checkpoint:** implemented and verified at the service, HTTP, and PostgreSQL boundaries. The customer can refresh or poll after a network interruption and recover the current initialization and checkout URL; a browser redirect alone cannot mark a booking paid.
 
 ## Step 7 — Wire dependencies and prove the real flow
 
@@ -138,4 +138,4 @@ Also exercise the failure boundary: same-key replay, same key with changed seats
 
 ## Work order
 
-Do not implement all seven steps in one pass. Booking creation, protected details, email verification, and the checkout coordinator/database transaction are implemented. Next, add the payment-initialization status read, then verify the full local customer path without a seeded booking/payment fixture.
+Do not implement all seven steps in one pass. Booking creation, protected details, email verification, checkout coordination, and the payment-initialization status read are implemented. Next, verify the full local customer path without a seeded booking/payment fixture, then exercise the documented failure boundaries.

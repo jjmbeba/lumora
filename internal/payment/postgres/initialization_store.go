@@ -49,6 +49,50 @@ func (p *InitializationStore) CreateOrReplayInitialization(ctx context.Context, 
 	return payment.Initialization{}, errors.New("initialization receipt conflict could not be resolved")
 }
 
+func (p *InitializationStore) GetLatestForBooking(ctx context.Context, bookingReference string) (payment.Initialization, error) {
+	bookingReference = strings.TrimSpace(bookingReference)
+	if bookingReference == "" {
+		return payment.Initialization{}, payment.ErrInvalidInitializationRequest
+	}
+
+	var initialization payment.Initialization
+	var status, method string
+	err := p.db.QueryRowContext(ctx, `
+		SELECT pi.id, pi.status::text, pi.payment_method::text,
+		       pi.paystack_reference, COALESCE(pi.authorization_url, '')
+		FROM payment_initializations AS pi
+		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
+		JOIN bookings AS b ON b.id = pa.booking_id
+		WHERE b.booking_reference = $1
+		ORDER BY pi.id DESC
+		LIMIT 1
+	`, bookingReference).Scan(
+		&initialization.ID,
+		&status,
+		&method,
+		&initialization.PaystackReference,
+		&initialization.AuthorizationURL,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return payment.Initialization{}, payment.ErrInitializationNotFound
+	}
+	if err != nil {
+		return payment.Initialization{}, fmt.Errorf("load latest payment initialization for booking: %w", err)
+	}
+
+	initialization.Status, err = parseInitializationStatus(status)
+	if err != nil {
+		return payment.Initialization{}, fmt.Errorf("parse payment initialization status: %w", err)
+	}
+
+	initialization.PaymentMethod, err = parsePaymentMethod(method)
+	if err != nil {
+		return payment.Initialization{}, fmt.Errorf("parse payment initialization method: %w", err)
+	}
+
+	return initialization, nil
+}
+
 var errInitializationReceiptConflict = errors.New("initialization receipt concurrently created")
 
 func (p *InitializationStore) createOrReplayInitialization(ctx context.Context, request payment.CreateInitializationRequest) (payment.Initialization, error) {

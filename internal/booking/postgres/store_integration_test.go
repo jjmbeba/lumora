@@ -276,7 +276,7 @@ func TestCheckoutRetryAfterInitializationFailureReplaysBooking(t *testing.T) {
 }
 
 type failFirstInitializationCreator struct {
-	delegate payment.InitializationCreator
+	delegate checkout.InitializationStore
 	err      error
 	failed   bool
 }
@@ -287,6 +287,10 @@ func (f *failFirstInitializationCreator) CreateOrReplayInitialization(ctx contex
 		return payment.Initialization{}, f.err
 	}
 	return f.delegate.CreateOrReplayInitialization(ctx, request)
+}
+
+func (f *failFirstInitializationCreator) GetLatestForBooking(ctx context.Context, bookingReference string) (payment.Initialization, error) {
+	return f.delegate.GetLatestForBooking(ctx, bookingReference)
 }
 
 type bookingIntegrationFixture struct {

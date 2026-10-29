@@ -11,4 +11,5 @@ var (
 	ErrInvalidInitializationRequest      = errors.New("invalid payment initialization request")
 	ErrBookingNotEligibleForPayment      = errors.New("booking is not eligible for payment initialization")
 	ErrPaymentAttemptNotRetryable        = errors.New("payment attempt does not permit a new initialization")
+	ErrInitializationNotFound            = errors.New("payment initialization not found")
 )

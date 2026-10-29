@@ -51,6 +51,36 @@ func TestInitializationReplayAndConflict(t *testing.T) {
 	}
 }
 
+func TestGetLatestForBookingReturnsCheckoutDetails(t *testing.T) {
+	db, store := integrationInitializationStore(t)
+	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	const checkoutURL = "https://checkout.example.test/pay"
+	if _, err := db.Exec(`UPDATE payment_initializations SET status = 'READY', lease_expires_at = NULL, authorization_url = $1 WHERE id = $2`, checkoutURL, rows.initializationID); err != nil {
+		t.Fatalf("mark initialization ready: %v", err)
+	}
+
+	got, err := store.GetLatestForBooking(context.Background(), initializationRequest(rows).BookingReference)
+	if err != nil {
+		t.Fatalf("GetLatestForBooking() error = %v", err)
+	}
+	if got.ID != rows.initializationID || got.Status != payment.InitializationStatusReady || got.PaymentMethod != payment.PaymentMethodCard ||
+		got.PaystackReference != rows.reference || got.AuthorizationURL != checkoutURL {
+		t.Errorf("GetLatestForBooking() = %+v, want ready initialization %d with checkout URL", got, rows.initializationID)
+	}
+}
+
+func TestGetLatestForBookingReturnsNotFoundWithoutInitialization(t *testing.T) {
+	db, store := integrationInitializationStore(t)
+	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	if _, err := db.Exec(`DELETE FROM payment_initializations WHERE id = $1`, rows.initializationID); err != nil {
+		t.Fatalf("remove seeded initialization: %v", err)
+	}
+
+	if _, err := store.GetLatestForBooking(context.Background(), initializationRequest(rows).BookingReference); !errors.Is(err, payment.ErrInitializationNotFound) {
+		t.Fatalf("GetLatestForBooking() error = %v, want ErrInitializationNotFound", err)
+	}
+}
+
 func TestInitializationRecordsKeyForExistingUnresolvedWork(t *testing.T) {
 	db, store := integrationInitializationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
