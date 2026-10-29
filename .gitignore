@@ -1,0 +1,17 @@
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Go build and test artifacts
+/bin/
+*.test
+coverage.out
+
+# Local editor and OS files
+.idea/
+.vscode/
+.DS_Store
