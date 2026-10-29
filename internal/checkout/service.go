@@ -35,17 +35,26 @@ type Starter interface {
 	Start(ctx context.Context, request StartRequest) (StartResult, error)
 }
 
-type Service struct {
-	bookings        BookingCreator
-	initializations payment.InitializationCreator
+type InitializationReader interface {
+	GetLatestForBooking(ctx context.Context, bookingReference string) (payment.Initialization, error)
 }
 
-func NewService(bookings BookingCreator, initializations payment.InitializationCreator) (*Service, error) {
+type InitializationStore interface {
+	payment.InitializationCreator
+	InitializationReader
+}
+
+type Service struct {
+	bookings        BookingCreator
+	initializations InitializationStore
+}
+
+func NewService(bookings BookingCreator, initializations InitializationStore) (*Service, error) {
 	if bookings == nil {
 		return nil, ErrBookingCreatorRequired
 	}
 	if initializations == nil {
-		return nil, ErrInitializationCreatorRequired
+		return nil, ErrInitializationStoreRequired
 	}
 
 	return &Service{bookings: bookings, initializations: initializations}, nil
@@ -85,6 +94,15 @@ func (s *Service) Start(ctx context.Context, request StartRequest) (StartResult,
 	}
 
 	return StartResult{Booking: createdBooking, Initialization: initialization}, nil
+}
+
+func (s *Service) GetLatestInitialization(ctx context.Context, bookingReference string) (payment.Initialization, error) {
+	bookingReference = strings.TrimSpace(bookingReference)
+	if bookingReference == "" {
+		return payment.Initialization{}, payment.ErrInvalidInitializationRequest
+	}
+
+	return s.initializations.GetLatestForBooking(ctx, bookingReference)
 }
 
 type fingerprintInput struct {

@@ -90,9 +90,11 @@ Use `POST /bookings/{reference}/email-verification-challenges` to request the co
 
 **Goal:** make a valid booking eligible for the existing worker without making a provider call in the API transaction.
 
-**Likely files:** `internal/checkout/service.go` for the application use case and its contracts; `internal/checkout/errors.go` for constructor/input errors; `internal/payment/store.go` for initialization request/result types and its creator contract; `internal/payment/postgres/initialization_store.go` for the transaction that creates or replays payment attempts and initializations; booking service/store fingerprint support; PostgreSQL integration tests; and an HTTP handler under `internal/httpapi`.
+**Already implemented:** `internal/checkout/service.go` fingerprints the combined booking/payment-method request, commits/replays the booking through `CreateWithFingerprint`, then creates or replays the payment initialization. `internal/payment/postgres/initialization_store.go` persists the payment attempt and initialization transactionally. The payment store integration tests cover its idempotency, eligibility, and retry rules.
 
-The client starts booking and payment with one request. An application-level use case coordinates the operations: first commit the booking and its seat claims, then create or replay the durable payment initialization in a separate transaction. Do not put this orchestration in the HTTP handler, and do not combine it with the booking transaction. The worker remains responsible for contacting Paystack after the initialization is committed.
+**Implemented files:** `internal/checkout/service.go` and `service_test.go` coordinate the two writes and cover fingerprinting, payment-method changes, and failures. `internal/booking/httpapi/create_booking_handler.go` accepts `payment_method` and calls the checkout service; `cmd/booking-api/main.go` wires `payment/postgres.NewInitializationStore(db)` without worker lease configuration. The PostgreSQL integration test in `internal/booking/postgres/store_integration_test.go` verifies recovery when booking creation commits but initialization creation fails before its transaction begins.
+
+The client starts booking and payment with one `POST /bookings` request containing `payment_method: "CARD"` or `"MPESA"` and an `Idempotency-Key` header. The response contains both the booking and its payment-initialization status. A newly created initialization is `QUEUED`; omit `authorization_url` until the worker has received one from Paystack. An application-level use case coordinates the operations: first commit the booking and its seat claims, then create or replay the durable payment initialization in a separate transaction. Do not put this orchestration in the HTTP handler, and do not combine it with the booking transaction. The worker remains responsible for contacting Paystack after the initialization is committed.
 
 Plan for the partial-failure boundary: if booking creation commits but initialization creation fails, the booking and hold remain. A retry with the same request must replay the original booking without extending its hold, then safely retry or replay initialization. If initialization committed but the response was lost, the retry must return that same initialization. Include payment method and consistent idempotency/fingerprint behavior in the coordinated request contract; do not let a retry silently change payment method.
 
@@ -108,19 +110,19 @@ If the customer requests another payment method while an initialization is unres
 
 For a retry on an existing booking, use an operation such as `POST /bookings/{reference}/payment-initializations`. Give each retry a fresh idempotency key and fingerprint. Replay the same initialization for a matching key and request; reject the key if its request changes. Create a new initialization for the same payment attempt only when its latest initialization is definitively `REJECTED`. Require the same customer verification used for protected booking details; the booking reference alone is not authorization.
 
-**Checkpoint:** after the API operation commits, the worker can claim the `QUEUED` row without a test-only SQL insert. If the API response is lost and the client retries, idempotency returns the same initialization rather than scheduling a second provider request.
+**Checkpoint:** this step is implemented and its unit, HTTP, and PostgreSQL integration tests pass. The test proves that retrying after the partial failure returns the original booking and hold expiry, then creates exactly one queued initialization. The API can now create work the worker claims without a test-only SQL insert.
 
 ## Step 6 — Let the client obtain checkout details and current state
 
 **Goal:** bridge the asynchronous worker and the customer UI.
 
-**Likely files:** extend `internal/httpapi` with a read/status handler; add a focused read method to the package that consumes the store; implement it in the payment PostgreSQL adapter; add handler and store tests.
+**Implemented:** `checkout.Service.GetLatestInitialization` reads through its consumer-owned `InitializationReader` contract. `payment/postgres.InitializationStore.GetLatestForBooking` loads the latest initialization for a booking. `GET /bookings/{reference}/payment-initialization` is registered by `cmd/booking-api/main.go` and requires the same booking-scoped bearer token as booking details. It returns the initialization status and payment method, and includes `authorization_url` only after the worker has received one. Focused checkout, HTTP, and PostgreSQL integration tests cover pending and ready responses, authorization, missing initialization, and storage errors.
 
 The initialization may be `QUEUED` or `SUBMITTING` before Paystack returns an authorization URL. Make that pending state explicit in the API contract. Once it becomes `READY`, return the stored authorization URL. Afterward, the same resource should let the client observe payment progress and terminal outcomes without trusting a browser redirect as proof of payment.
 
 Do not make the request wait for the worker or synchronously call Paystack. The existing worker and verified webhook/reconciliation path remain authoritative for payment status.
 
-**Checkpoint:** the customer can refresh or poll after a network interruption and recover the same initialization and checkout URL; a browser redirect alone cannot mark a booking paid.
+**Checkpoint:** implemented and verified at the service, HTTP, and PostgreSQL boundaries. The customer can refresh or poll after a network interruption and recover the current initialization and checkout URL; a browser redirect alone cannot mark a booking paid.
 
 ## Step 7 — Wire dependencies and prove the real flow
 
@@ -136,4 +138,4 @@ Also exercise the failure boundary: same-key replay, same key with changed seats
 
 ## Work order
 
-Do not implement all seven steps in one pass. Finish Steps 1–3 first and review the transaction behavior before adding HTTP. Then add the payment initialization API and status read. The next concrete work session should begin with Step 1: write down the request, replay, and conflict outcomes, then ask for review before creating the Go types.
+Do not implement all seven steps in one pass. Booking creation, protected details, email verification, checkout coordination, and the payment-initialization status read are implemented. Next, verify the full local customer path without a seeded booking/payment fixture, then exercise the documented failure boundaries.

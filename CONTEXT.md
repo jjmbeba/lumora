@@ -1,6 +1,6 @@
 # Cinema Ticketing Backend — Project Context
 
-Last updated: 2026-10-26
+Last updated: 2026-10-29
 
 ## Purpose and working style
 
@@ -66,10 +66,10 @@ Agreed design defaults:
 
 ## Current stage and next step
 
-The Go payment worker, Paystack adapter, PostgreSQL state transitions, signed webhook inbox, booking creation API, email verification flow, and token-protected booking-details endpoint are implemented. Focused booking, HTTP, and PostgreSQL integration tests pass. A Paystack sandbox checkout reached initialization `PAID`, payment `PAID`, and booking `BOOKED`, with its seat claim retained. The customer booking-and-payment-initialization API flow is still not implemented; the current booking API creates bookings, while payment fixtures have also been seeded directly for sandbox testing.
+The Go payment worker, Paystack adapter, PostgreSQL state transitions, signed webhook inbox, email verification flow, and token-protected booking-details endpoint are implemented. `POST /bookings` coordinates booking creation with durable payment initialization; `GET /bookings/{reference}/payment-initialization` returns its latest state and checkout URL to a verified customer. Coordinator, HTTP, and PostgreSQL integration tests cover checkout creation, partial-failure replay, and status reads. A Paystack sandbox checkout reached initialization `PAID`, payment `PAID`, and booking `BOOKED`, with its seat claim retained.
 
-Next: follow [the customer booking and payment API guide](docs/guides/customer-booking-payment-api-implementation.md) and implement durable payment initialization creation as the next application flow. Coordinate booking creation with payment initialization in separate transactions, preserve idempotent replay behavior, and then expose the worker-created checkout URL and payment state to the client. Preserve the distinction between known-no-checkout expiry and unresolved payment expiry described above.
+Next: verify the complete customer flow without a test-only SQL seed, following [the customer booking and payment API guide](docs/guides/customer-booking-payment-api-implementation.md). Create a booking through the API, poll the protected payment-initialization endpoint until the worker returns the checkout URL, complete a sandbox payment, and confirm initialization/payment/booking reach `PAID`/`PAID`/`BOOKED`. Then exercise the documented failure boundaries. Preserve the distinction between known-no-checkout expiry and unresolved payment expiry described above.
 
 ## How to resume in a new Codex chat
 
-Open `/home/jjmbeba/Desktop/projects/cinema-ticketing-backend` as the project, then ask the new chat to read this file and the relevant artifact before continuing. Start with the durable payment-initialization API flow. Preserve this file as the concise source of current decisions and update it when decisions change.
+Open `/home/jjmbeba/Desktop/projects/cinema-ticketing-backend` as the project, then ask the new chat to read this file and the relevant artifact before continuing. Start with the local customer-flow smoke test. Preserve this file as the concise source of current decisions and update it when decisions change.

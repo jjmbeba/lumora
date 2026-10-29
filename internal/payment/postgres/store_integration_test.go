@@ -491,7 +491,26 @@ type paymentState struct {
 
 func integrationStore(t *testing.T) (*sql.DB, *PostgresStore) {
 	t.Helper()
+	db := integrationDatabase(t)
+	store, err := NewPostgresStore(db, 30*time.Second)
+	if err != nil {
+		t.Fatalf("create PostgreSQL store: %v", err)
+	}
+	return db, store
+}
 
+func integrationInitializationStore(t *testing.T) (*sql.DB, *InitializationStore) {
+	t.Helper()
+	db := integrationDatabase(t)
+	store, err := NewInitializationStore(db)
+	if err != nil {
+		t.Fatalf("create payment initialization store: %v", err)
+	}
+	return db, store
+}
+
+func integrationDatabase(t *testing.T) *sql.DB {
+	t.Helper()
 	dsn := os.Getenv("PAYMENT_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("set PAYMENT_TEST_DATABASE_URL to a dedicated PostgreSQL database with migrations/migration.sql applied")
@@ -520,12 +539,7 @@ func integrationStore(t *testing.T) (*sql.DB, *PostgresStore) {
 	if !schemaReady {
 		t.Fatalf("payment_initializations is missing; apply migrations/migration.sql to the test database first")
 	}
-
-	store, err := NewPostgresStore(db, 30*time.Second)
-	if err != nil {
-		t.Fatalf("create PostgreSQL store: %v", err)
-	}
-	return db, store
+	return db
 }
 
 func seedPaymentRows(t *testing.T, db *sql.DB, paymentStatus, bookingStatus string) paymentRows {

@@ -37,7 +37,7 @@ func cleanupNewInitializations(t *testing.T, db *sql.DB, rows paymentRows) {
 }
 
 func TestInitializationReplayAndConflict(t *testing.T) {
-	db, store := integrationStore(t)
+	db, store := integrationInitializationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	request := initializationRequest(rows)
 
@@ -51,8 +51,38 @@ func TestInitializationReplayAndConflict(t *testing.T) {
 	}
 }
 
+func TestGetLatestForBookingReturnsCheckoutDetails(t *testing.T) {
+	db, store := integrationInitializationStore(t)
+	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	const checkoutURL = "https://checkout.example.test/pay"
+	if _, err := db.Exec(`UPDATE payment_initializations SET status = 'READY', lease_expires_at = NULL, authorization_url = $1 WHERE id = $2`, checkoutURL, rows.initializationID); err != nil {
+		t.Fatalf("mark initialization ready: %v", err)
+	}
+
+	got, err := store.GetLatestForBooking(context.Background(), initializationRequest(rows).BookingReference)
+	if err != nil {
+		t.Fatalf("GetLatestForBooking() error = %v", err)
+	}
+	if got.ID != rows.initializationID || got.Status != payment.InitializationStatusReady || got.PaymentMethod != payment.PaymentMethodCard ||
+		got.PaystackReference != rows.reference || got.AuthorizationURL != checkoutURL {
+		t.Errorf("GetLatestForBooking() = %+v, want ready initialization %d with checkout URL", got, rows.initializationID)
+	}
+}
+
+func TestGetLatestForBookingReturnsNotFoundWithoutInitialization(t *testing.T) {
+	db, store := integrationInitializationStore(t)
+	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	if _, err := db.Exec(`DELETE FROM payment_initializations WHERE id = $1`, rows.initializationID); err != nil {
+		t.Fatalf("remove seeded initialization: %v", err)
+	}
+
+	if _, err := store.GetLatestForBooking(context.Background(), initializationRequest(rows).BookingReference); !errors.Is(err, payment.ErrInitializationNotFound) {
+		t.Fatalf("GetLatestForBooking() error = %v, want ErrInitializationNotFound", err)
+	}
+}
+
 func TestInitializationRecordsKeyForExistingUnresolvedWork(t *testing.T) {
-	db, store := integrationStore(t)
+	db, store := integrationInitializationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	request := initializationRequest(rows)
 	request.IdempotencyKey += "-mpesa"
@@ -101,7 +131,7 @@ func TestInitializationRecordsKeyForExistingUnresolvedWork(t *testing.T) {
 }
 
 func TestInitializationConcurrentSameKeyDifferentBookings(t *testing.T) {
-	db, store := integrationStore(t)
+	db, store := integrationInitializationStore(t)
 	firstRows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	secondRows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	rejectSeedInitialization(t, db, firstRows)
@@ -148,7 +178,7 @@ func TestInitializationConcurrentSameKeyDifferentBookings(t *testing.T) {
 }
 
 func TestInitializationCreatesAttemptFromBookingSnapshots(t *testing.T) {
-	db, store := integrationStore(t)
+	db, store := integrationInitializationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	if _, err := db.Exec(`DELETE FROM payment_initializations WHERE id = $1`, rows.initializationID); err != nil {
 		t.Fatalf("remove seeded initialization: %v", err)
@@ -180,7 +210,7 @@ func TestInitializationCreatesAttemptFromBookingSnapshots(t *testing.T) {
 }
 
 func TestInitializationConcurrentRetryCreatesOneRecord(t *testing.T) {
-	db, store := integrationStore(t)
+	db, store := integrationInitializationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	rejectSeedInitialization(t, db, rows)
 	cleanupNewInitializations(t, db, rows)
@@ -219,7 +249,7 @@ func TestInitializationConcurrentRetryCreatesOneRecord(t *testing.T) {
 func TestInitializationExpiredHoldCancelsAfterRejection(t *testing.T) {
 	for _, replay := range []bool{false, true} {
 		t.Run(fmt.Sprintf("replay=%t", replay), func(t *testing.T) {
-			db, store := integrationStore(t)
+			db, store := integrationInitializationStore(t)
 			rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 			rejectSeedInitialization(t, db, rows)
 			if _, err := db.Exec(`UPDATE bookings SET created_at = clock_timestamp() - interval '2 seconds', hold_expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`, rows.bookingID); err != nil {
@@ -246,7 +276,7 @@ func TestInitializationExpiredHoldCancelsAfterRejection(t *testing.T) {
 }
 
 func TestInitializationOldReceiptDoesNotCancelNewerUnresolvedWork(t *testing.T) {
-	db, store := integrationStore(t)
+	db, store := integrationInitializationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	rejectSeedInitialization(t, db, rows)
 	cleanupNewInitializations(t, db, rows)
@@ -277,7 +307,7 @@ func TestInitializationOldReceiptDoesNotCancelNewerUnresolvedWork(t *testing.T) 
 }
 
 func TestInitializationUnresolvedStatusAgreesWithIndexAndLookup(t *testing.T) {
-	db, _ := integrationStore(t)
+	db, _ := integrationInitializationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
 	var predicate string
 	if err := db.QueryRow(`SELECT pg_get_expr(indpred, indrelid) FROM pg_index WHERE indexrelid = 'one_unresolved_initialization_per_payment_attempt'::regclass`).Scan(&predicate); err != nil {
