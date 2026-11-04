@@ -1,6 +1,6 @@
 # Cinema Ticketing Backend — Project Context
 
-Last updated: 2026-10-29
+Last updated: 2026-11-03
 
 ## Purpose and working style
 
@@ -14,6 +14,25 @@ Build a reliable end-to-end backend for a single independent cinema, using Go. T
 - A booking reserves the selected seats for five minutes. Seat claims must be atomic: all selected seats are claimed or none are.
 - Require verification through the booking email before returning booking details or allowing payment retry; a booking reference alone does not authorize access. The agreed flow uses a six-digit single-use code, HMAC-SHA-256 digest, 10-minute code lifetime, five attempts, 60-second resend cooldown, five sends per booking/hour, and a 15-minute booking-scoped opaque bearer token. Store only code/token digests; never log raw codes or tokens.
 - Booking states: `RESERVED`, `PAYMENT_REVIEW`, `BOOKED`, `CANCELLED`.
+- A ticket is an admission credential for one seat on one screening. A confirmed booking gets exactly one ticket per booked seat; customers retrieve them through the email-verified booking-details endpoint and receive them by email after confirmation.
+- `MarkPaid` is the v1 transaction boundary for confirming payment/booking, issuing tickets, and queuing the durable confirmation email; use focused persistence helpers rather than a generic transaction framework.
+- Existing bookings that became `BOOKED` before ticket issuance are legacy rows and are not backfilled by SQL. Before enabling ticket access in any retained environment, run an idempotent application-level backfill that creates encrypted ticket credentials and email jobs; disposable local data can instead be reseeded.
+- Booking confirmation email delivery is durable: a PostgreSQL-backed job is committed with the booking/tickets and retried independently after commit; email failure does not undo confirmation.
+- Send a single confirmation email per booking containing every ticket and its QR code.
+- Tickets are independently shareable and redeemable; group members can check in separately, and late guests use their own still-unused ticket.
+- An unused ticket can be redeemed through its screening's scheduled `end_time`, with no short cutoff after `start_time`; redemption is rejected after the screening ends.
+- Each ticket includes a QR code for admission. The first successful scan redeems it atomically; later scans are rejected as already used.
+- Ticket QR codes contain 32 cryptographically random bytes encoded as unpadded URL-safe base64. Store SHA-256 of the raw bytes for lookup and AES-256-GCM ciphertext for re-rendering, bound to the booking and seat IDs; keep versioned encryption keys outside PostgreSQL. Configure `TICKET_CREDENTIAL_CURRENT_KEY_VERSION`, `TICKET_CREDENTIAL_KEY_VERSIONS` (for example, `1,2`), and matching `TICKET_CREDENTIAL_KEY_<version>` values containing standard-base64-encoded 32-byte keys. Retain old key versions while tickets encrypted with them remain. Never store the credential as plaintext or include booking/customer/seat details in the QR.
+- Admission requires an unused ticket and a booking still in `BOOKED`; review or cancelled bookings are not admitted even if tickets were issued earlier.
+- Ticket redemption requires authenticated staff and records the staff member who redeemed it.
+- Create the first owner account through a one-time bootstrap path; managers then provision staff through a manager-only frontend flow, with no public signup.
+- Protect first-owner setup with a high-entropy secret configured outside the database; disable bootstrap immediately after creating the first owner.
+- Staff sign in with individual email/password credentials and receive an expiring revocable session; store only adaptive password hashes, never plaintext, and keep staff auth separate from customer booking tokens.
+- Scanner sessions last at most 8 hours; staff can log out, and deactivation revokes sessions immediately.
+- Expire scanner sessions after 15 minutes of inactivity.
+- Staff roles: `MANAGER` can provision/deactivate staff and redeem tickets; `SCANNER` can redeem tickets only. The first owner is a manager.
+- New staff receive a single-use setup link to choose a password; accounts remain inactive until setup. Deactivation revokes active sessions.
+- Ticket scans require a live backend connection in v1 to validate current booking state and redeem once; offline scanning is deferred.
 - Payment states: `PENDING`, `PAID`, `FAILED`, `CANCELLED`.
 - If a hold expires while payment is ambiguous, keep the seats unavailable. Move the booking to review when automated reconciliation cannot resolve payment. A confirmed terminal failure/cancellation releases claims. Retrying after a terminal payment outcome requires a new booking and seat selection.
 - Paystack `abandoned` remains pending while the booking hold is valid. Once the hold expires, the initialization and non-cancelled booking move to review while payment state and existing seat claims are preserved. A late `charge.success` after cancellation also requires staff review and never reacquires released seat claims. A verified `reversed` transaction moves the booking and initialization to review, preserves payment status and existing claims, and never reacquires claims already released by cancellation.
@@ -52,7 +71,7 @@ Agreed design defaults:
 - `docs/research/kenya-online-payment-options.md` — provider research.
 - `docs/research/go-project-structure.md` — official Go guidance and the proposed project structure.
 - `docs/architecture/decisions.md` — accepted product, architecture, and design decisions plus deferred choices.
-- `migrations/migration.sql`, `migrations/webhooks.sql`, `migrations/identity-defaults.sql`, and `migrations/04-screening-currency.sql` — PostgreSQL schema creation and follow-up upgrades.
+- `migrations/migration.sql`, `migrations/webhooks.sql`, `migrations/identity-defaults.sql`, `migrations/04-screening-currency.sql`, `migrations/05-payment-initialization-receipts.sql`, `migrations/06-booking-email-verification.sql`, and `migrations/07-ticketing-staff-email-outbox.sql` — PostgreSQL schema creation and follow-up upgrades. Migration 07 was applied successfully to `cinema_ticketing_test` on 2026-11-04 after confirming none of its types or tables existed.
 
 ## Important database invariants to implement
 
@@ -66,9 +85,9 @@ Agreed design defaults:
 
 ## Current stage and next step
 
-The Go payment worker, Paystack adapter, PostgreSQL state transitions, signed webhook inbox, email verification flow, and token-protected booking-details endpoint are implemented. `POST /bookings` coordinates booking creation with durable payment initialization; `GET /bookings/{reference}/payment-initialization` returns its latest state and checkout URL to a verified customer. Coordinator, HTTP, and PostgreSQL integration tests cover checkout creation, partial-failure replay, and status reads. A Paystack sandbox checkout reached initialization `PAID`, payment `PAID`, and booking `BOOKED`, with its seat claim retained.
+The Go payment worker, Paystack adapter, PostgreSQL state transitions, signed webhook inbox, email verification flow, and token-protected booking-details endpoint are implemented. The details endpoint now reveals each booked seat’s decrypted QR credential only after validating the booking access token; reserved bookings do not include ticket data. The customer booking/payment flow has reached `PAID`/`PAID`/`BOOKED` in the Paystack sandbox, and webhook replay was checked locally. `MarkPaid` creates one encrypted ticket per saved booking seat and queues one durable ticket email in the same transaction. The ticket email worker claims outbox jobs with leases, decrypts stable ticket credentials, renders inline QR images, and retries delivery with Resend idempotency keys. Migration 07 is applied to `cinema_ticketing_test`; focused PostgreSQL tests for `MarkPaid` and outbox claim/retry/fencing passed on 2026-11-04. The `internal/ticket` credential cipher is configured from a versioned environment key ring. The logical schema is in [the DBML schema](docs/architecture/cinema-ticketing-schema.dbml).
 
-Next: verify the complete customer flow without a test-only SQL seed, following [the customer booking and payment API guide](docs/guides/customer-booking-payment-api-implementation.md). Create a booking through the API, poll the protected payment-initialization endpoint until the worker returns the checkout URL, complete a sandbox payment, and confirm initialization/payment/booking reach `PAID`/`PAID`/`BOOKED`. Then exercise the documented failure boundaries. Preserve the distinction between known-no-checkout expiry and unresolved payment expiry described above.
+Next: before enabling tickets in an environment with retained pre-feature `BOOKED` rows, run an idempotent application-level backfill for their ticket credentials and email jobs; disposable local data can be reseeded. Then implement staff authentication/onboarding and online ticket redemption. Keep the accepted invariants in this file and [the architecture decisions](docs/architecture/decisions.md).
 
 ## How to resume in a new Codex chat
 

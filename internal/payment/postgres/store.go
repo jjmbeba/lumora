@@ -9,16 +9,21 @@ import (
 
 	"example.com/cinema-tickets-backend/internal/booking"
 	"example.com/cinema-tickets-backend/internal/payment"
+	"example.com/cinema-tickets-backend/internal/ticket"
 )
 
 type PostgresStore struct {
-	db            *sql.DB
-	leaseDuration time.Duration
+	db                *sql.DB
+	leaseDuration     time.Duration
+	ticketCredentials *ticket.CredentialCipher
 }
 
-func NewPostgresStore(db *sql.DB, leaseDuration time.Duration) (*PostgresStore, error) {
+func NewPostgresStore(db *sql.DB, leaseDuration time.Duration, ticketCredentials *ticket.CredentialCipher) (*PostgresStore, error) {
 	if db == nil {
-		return nil, errors.New("database pool is required")
+		return nil, ErrDatabasePoolRequired
+	}
+	if ticketCredentials == nil {
+		return nil, ErrTicketCredentialCipherRequired
 	}
 
 	if leaseDuration < time.Microsecond {
@@ -26,8 +31,9 @@ func NewPostgresStore(db *sql.DB, leaseDuration time.Duration) (*PostgresStore, 
 	}
 
 	return &PostgresStore{
-		db:            db,
-		leaseDuration: leaseDuration,
+		db:                db,
+		leaseDuration:     leaseDuration,
+		ticketCredentials: ticketCredentials,
 	}, nil
 }
 
@@ -597,7 +603,7 @@ func (p *PostgresStore) MarkPaid(ctx context.Context, claim payment.Claim, verif
 	}
 
 	const lockClaimSQL = `
-		SELECT pa.id, b.id, pa.status::text, b.status::text
+		SELECT pa.id, b.id, pa.status::text, b.status::text, b.customer_email
 		FROM payment_initializations AS pi
 		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
 		JOIN bookings AS b ON b.id = pa.booking_id
@@ -634,8 +640,9 @@ func (p *PostgresStore) MarkPaid(ctx context.Context, claim payment.Claim, verif
 	var paymentAttemptStatus string
 	var bookingID int
 	var bookingStatus string
+	var customerEmail string
 
-	err = tx.QueryRowContext(ctx, lockClaimSQL, claim.InitializationID, claim.Generation).Scan(&paymentAttemptID, &bookingID, &paymentAttemptStatus, &bookingStatus)
+	err = tx.QueryRowContext(ctx, lockClaimSQL, claim.InitializationID, claim.Generation).Scan(&paymentAttemptID, &bookingID, &paymentAttemptStatus, &bookingStatus, &customerEmail)
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.ErrClaimLost
 	}
@@ -690,6 +697,13 @@ func (p *PostgresStore) MarkPaid(ctx context.Context, claim payment.Claim, verif
 
 	default:
 		return payment.ErrPaymentStateConflict
+	}
+
+	if err := p.insertTickets(ctx, tx, bookingID); err != nil {
+		return fmt.Errorf("create booking tickets: %w", err)
+	}
+	if err := p.insertEmailTask(ctx, tx, bookingID, customerEmail); err != nil {
+		return fmt.Errorf("enqueue booking ticket email: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

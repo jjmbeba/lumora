@@ -5,6 +5,7 @@ go 1.27.0
 require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/resend/resend-go/v4 v4.9.1
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 )
 
 require (

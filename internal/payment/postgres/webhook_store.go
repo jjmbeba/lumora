@@ -15,7 +15,7 @@ type WebhookStore struct {
 
 func NewWebhookStore(db *sql.DB) (*WebhookStore, error) {
 	if db == nil {
-		return nil, errors.New("database pool is required")
+		return nil, ErrDatabasePoolRequired
 	}
 
 	return &WebhookStore{

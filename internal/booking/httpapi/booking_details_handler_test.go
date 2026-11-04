@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func TestBookingDetailsHandlerReturnsDetailsAfterTokenValidation(t *testing.T) {
 			EndTime:        startTime.Add(2 * time.Hour),
 		},
 		Seats: []booking.BookingSeatDetail{
-			{Label: "A1", UnitPriceAmountMinor: 1000},
+			{Label: "A1", UnitPriceAmountMinor: 1000, Ticket: &booking.BookingTicketDetails{QRCodeValue: "opaque-qr-credential"}},
 			{Label: "A2", UnitPriceAmountMinor: 1500},
 		},
 	}
@@ -90,8 +91,7 @@ func TestBookingDetailsHandlerReturnsDetailsAfterTokenValidation(t *testing.T) {
 		t.Fatalf("decode response JSON: %v", err)
 	}
 	if got.Reference != want.Reference || got.Status != want.Status || got.TotalAmountMinor != want.TotalAmountMinor || got.Currency != want.Currency ||
-		!got.HoldExpiresAt.Equal(want.HoldExpiresAt) || got.Screening != want.Screening || len(got.Seats) != len(want.Seats) ||
-		got.Seats[0] != want.Seats[0] || got.Seats[1] != want.Seats[1] {
+		!got.HoldExpiresAt.Equal(want.HoldExpiresAt) || got.Screening != want.Screening || !reflect.DeepEqual(got.Seats, want.Seats) {
 		t.Errorf("details = %+v, want %+v", got, want)
 	}
 	if verificationStore.validateCalls != 1 {

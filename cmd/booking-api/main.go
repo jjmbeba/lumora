@@ -20,6 +20,7 @@ import (
 	"example.com/cinema-tickets-backend/internal/config"
 	"example.com/cinema-tickets-backend/internal/email/resend"
 	paymentpostgres "example.com/cinema-tickets-backend/internal/payment/postgres"
+	"example.com/cinema-tickets-backend/internal/ticket"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -56,6 +57,16 @@ func runMain() error {
 	if err != nil {
 		return err
 	}
+	credentialKeyring, err := config.TicketCredentialKeyringFromEnv()
+	if err != nil {
+		return err
+	}
+	defer clearCredentialKeys(credentialKeyring.Keys)
+
+	credentialCipher, err := ticket.NewCredentialCipher(credentialKeyring.Keys, credentialKeyring.CurrentVersion)
+	if err != nil {
+		return fmt.Errorf("configure ticket credential cipher: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
@@ -65,10 +76,10 @@ func runMain() error {
 
 	defer stop()
 
-	return run(ctx, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr)
+	return run(ctx, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr, credentialCipher)
 }
 
-func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr string) error {
+func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr string, credentialCipher *ticket.CredentialCipher) error {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("open database pool: %w", err)
@@ -84,7 +95,7 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 		return fmt.Errorf("connect to database: %w", err)
 	}
 
-	store, err := bookingpostgres.NewPostgresStore(db)
+	store, err := bookingpostgres.NewPostgresStore(db, credentialCipher)
 	if err != nil {
 		return err
 	}
@@ -184,5 +195,11 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 		}
 
 		return nil
+	}
+}
+
+func clearCredentialKeys(keys map[int16][]byte) {
+	for _, key := range keys {
+		clear(key)
 	}
 }
