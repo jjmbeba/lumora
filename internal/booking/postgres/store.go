@@ -31,59 +31,6 @@ func NewPostgresStore(db *sql.DB, ticketCredentials *ticket.CredentialCipher) (*
 }
 
 func (p *PostgresStore) Create(ctx context.Context, params booking.CreateBookingParams) (booking.Booking, error) {
-	const createBooking = `
-		WITH booking_time AS MATERIALIZED (
-			SELECT clock_timestamp() AS created_at
-		)
-		INSERT INTO bookings (
-			booking_reference,
-			idempotency_key,
-			request_fingerprint,
-			customer_email,
-			customer_phone,
-			status,
-			screening_id,
-			created_at,
-			hold_expires_at
-		)
-		SELECT $1, $2, $3, $4, $5, 'RESERVED', $6,
-		       booking_time.created_at,
-		       booking_time.created_at + INTERVAL '5 minutes'
-		FROM booking_time
-		ON CONFLICT (idempotency_key) DO NOTHING
-		RETURNING id, hold_expires_at
-	`
-
-	const createSeatSnapshots = `
-		WITH inserted AS (
-			INSERT INTO bookings_seats (
-				booking_id,
-				seat_id,
-				screening_id,
-				unit_price_amount,
-				currency
-			)
-			SELECT $1, ss.seat_id, ss.screening_id, ss.price_amount, s.currency
-			FROM screening_seats AS ss
-			JOIN screenings AS s ON s.id = ss.screening_id
-			WHERE ss.screening_id = $2
-			  AND ss.seat_id = ANY($3::int[])
-			RETURNING unit_price_amount, currency, seat_id
-		)
-		SELECT COALESCE(SUM(unit_price_amount), 0)::bigint,
-		       MIN(currency),
-		       COUNT(seat_id)
-		FROM inserted
-	`
-
-	const claimSeats = `
-		INSERT INTO seat_claims (screening_id, seat_id, booking_id)
-		SELECT screening_id, seat_id, booking_id
-		FROM bookings_seats
-		WHERE booking_id = $1
-		ON CONFLICT (screening_id, seat_id) DO NOTHING
-	`
-
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("begin booking transaction: %w", err)
@@ -120,16 +67,14 @@ func (p *PostgresStore) Create(ctx context.Context, params booking.CreateBooking
 	var bookingID int
 	var holdExpiresAt time.Time
 
-	err = tx.QueryRowContext(
-		ctx,
-		createBooking,
-		reference,
-		params.IdempotencyKey,
-		params.RequestFingerprint,
-		params.Customer.Email,
-		params.Customer.PhoneNumber,
-		params.ScreeningID,
-	).Scan(&bookingID, &holdExpiresAt)
+	created, err := queries.CreateBooking(ctx, dbgen.CreateBookingParams{
+		BookingReference:   reference,
+		IdempotencyKey:     params.IdempotencyKey,
+		RequestFingerprint: params.RequestFingerprint,
+		CustomerEmail:      params.Customer.Email,
+		CustomerPhone:      params.Customer.PhoneNumber,
+		ScreeningID:        int32(params.ScreeningID),
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		existingRow, err = queries.LoadBookingByIdempotencyKey(ctx, params.IdempotencyKey)
@@ -155,36 +100,26 @@ func (p *PostgresStore) Create(ctx context.Context, params booking.CreateBooking
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("insert booking: %w", err)
 	}
+	bookingID, holdExpiresAt = int(created.ID), created.HoldExpiresAt
 
-	var (
-		totalPrice    int64
-		currency      sql.NullString
-		snapshotCount int64
-	)
-
-	err = tx.QueryRowContext(
-		ctx,
-		createSeatSnapshots,
-		bookingID,
-		params.ScreeningID,
-		params.RequestedSeatIDs,
-	).Scan(&totalPrice, &currency, &snapshotCount)
+	seatIDs := make([]int32, len(params.RequestedSeatIDs))
+	for i, id := range params.RequestedSeatIDs {
+		seatIDs[i] = int32(id)
+	}
+	snapshots, err := queries.CreateBookingSeatSnapshots(ctx, dbgen.CreateBookingSeatSnapshotsParams{
+		BookingID: int32(bookingID), ScreeningID: int32(params.ScreeningID), SeatIds: seatIDs,
+	})
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("create booking seat-price snapshots: %w", err)
 	}
 
-	if snapshotCount != int64(len(params.RequestedSeatIDs)) || !currency.Valid || totalPrice <= 0 {
+	if snapshots.SnapshotCount != int64(len(params.RequestedSeatIDs)) || snapshots.Currency == "" || snapshots.TotalPrice <= 0 {
 		return booking.Booking{}, booking.ErrSeatsUnavailable
 	}
 
-	result, err := tx.ExecContext(ctx, claimSeats, bookingID)
+	claimedSeatCount, err := queries.ClaimBookingSeats(ctx, int32(bookingID))
 	if err != nil {
 		return booking.Booking{}, fmt.Errorf("claim booking seats: %w", err)
-	}
-
-	claimedSeatCount, err := result.RowsAffected()
-	if err != nil {
-		return booking.Booking{}, fmt.Errorf("count claimed booking seats: %w", err)
 	}
 
 	if claimedSeatCount != int64(len(params.RequestedSeatIDs)) {
@@ -198,8 +133,8 @@ func (p *PostgresStore) Create(ctx context.Context, params booking.CreateBooking
 	return booking.Booking{
 		Reference:        reference,
 		Status:           booking.BookingStatusReserved,
-		TotalAmountMinor: totalPrice,
-		Currency:         currency.String,
+		TotalAmountMinor: snapshots.TotalPrice,
+		Currency:         snapshots.Currency,
 		HoldExpiresAt:    holdExpiresAt,
 	}, nil
 }

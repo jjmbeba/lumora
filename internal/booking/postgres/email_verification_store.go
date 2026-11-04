@@ -28,6 +28,7 @@ func (p *PostgresStore) CreateEmailVerificationChallenge(ctx context.Context, pa
 	}
 
 	defer tx.Rollback()
+	queries := dbgen.New(tx)
 
 	var (
 		bookingID      int
@@ -55,40 +56,19 @@ func (p *PostgresStore) CreateEmailVerificationChallenge(ctx context.Context, pa
 		return booking.EmailVerificationDelivery{}, nil
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		DELETE FROM booking_verification_send_attempts
-		WHERE booking_id = $1
-		  AND created_at <= $2::timestamptz - INTERVAL '1 hour'
-	`, bookingID, limits.DatabaseNow)
+	err = queries.PruneBookingEmailVerificationSendAttempts(ctx, dbgen.PruneBookingEmailVerificationSendAttemptsParams{BookingID: int32(bookingID), PruneBefore: limits.DatabaseNow})
 	if err != nil {
 		return booking.EmailVerificationDelivery{}, fmt.Errorf("prune old booking email verification send attempts: %w", err)
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO booking_verification_challenges (
-			booking_id,
-			code_digest,
-			expires_at,
-			failed_attempts,
-			consumed_at,
-			updated_at
-		)
-		VALUES ($1, $2, $3, 0, NULL, clock_timestamp())
-		ON CONFLICT (booking_id) DO UPDATE
-		SET code_digest = EXCLUDED.code_digest,
-		    expires_at = EXCLUDED.expires_at,
-		    failed_attempts = 0,
-		    consumed_at = NULL,
-		    updated_at = clock_timestamp()
-	`, bookingID, params.CodeDigest, params.ExpiresAt)
+	err = queries.UpsertBookingEmailVerificationChallenge(ctx, dbgen.UpsertBookingEmailVerificationChallengeParams{
+		BookingID: int32(bookingID), CodeDigest: params.CodeDigest, ExpiresAt: params.ExpiresAt,
+	})
 	if err != nil {
 		return booking.EmailVerificationDelivery{}, fmt.Errorf("save booking email verification challenge: %w", err)
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO booking_verification_send_attempts (booking_id, created_at)
-		VALUES ($1, clock_timestamp())
-	`, bookingID)
+	err = queries.RecordBookingEmailVerificationSendAttempt(ctx, int32(bookingID))
 	if err != nil {
 		return booking.EmailVerificationDelivery{}, fmt.Errorf("record booking email verification send attempt: %w", err)
 	}
@@ -117,6 +97,7 @@ func (p *PostgresStore) VerifyEmailCode(ctx context.Context, params booking.Veri
 	}
 
 	defer tx.Rollback()
+	queries := dbgen.New(tx)
 
 	bookingIDValue, err := dbgen.New(tx).LockBookingForEmailVerification(ctx, params.BookingReference)
 	bookingID := int(bookingIDValue)
@@ -143,16 +124,7 @@ func (p *PostgresStore) VerifyEmailCode(ctx context.Context, params booking.Veri
 	}
 
 	if !hmac.Equal(challenge.CodeDigest, params.CodeDigest) {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE booking_verification_challenges
-			SET failed_attempts = failed_attempts + 1,
-			    consumed_at = CASE
-			        WHEN failed_attempts + 1 >= $2 THEN clock_timestamp()
-			        ELSE consumed_at
-			    END,
-			    updated_at = clock_timestamp()
-			WHERE booking_id = $1
-		`, bookingID, maxEmailVerificationAttempts)
+		err := queries.RecordRejectedBookingEmailVerificationAttempt(ctx, dbgen.RecordRejectedBookingEmailVerificationAttemptParams{BookingID: int32(bookingID), FailedAttempts: maxEmailVerificationAttempts})
 
 		if err != nil {
 			return fmt.Errorf("record rejected booking email verification attempt: %w", err)
@@ -165,32 +137,17 @@ func (p *PostgresStore) VerifyEmailCode(ctx context.Context, params booking.Veri
 		return booking.ErrEmailCodeRejected
 	}
 
-	result, err := tx.ExecContext(ctx, `
-		UPDATE booking_verification_challenges
-		SET consumed_at = clock_timestamp(),
-		    updated_at = clock_timestamp()
-		WHERE booking_id = $1
-		  AND consumed_at IS NULL
-		  AND expires_at > clock_timestamp()
-	`, bookingID)
+	updated, err := queries.ConsumeBookingEmailVerificationChallenge(ctx, int32(bookingID))
 
 	if err != nil {
 		return fmt.Errorf("consume booking email verification code: %w", err)
-	}
-
-	updated, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check consumed booking email verification code: %w", err)
 	}
 
 	if updated != 1 {
 		return booking.ErrEmailCodeRejected
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO booking_tokens (booking_id, token_digest, expires_at)
-		VALUES ($1, $2, $3)
-	`, bookingID, params.TokenDigest, params.TokenExpiresAt)
+	err = queries.CreateBookingToken(ctx, dbgen.CreateBookingTokenParams{BookingID: int32(bookingID), TokenDigest: params.TokenDigest, ExpiresAt: params.TokenExpiresAt})
 	if err != nil {
 		return fmt.Errorf("persist booking token digest: %w", err)
 	}

@@ -42,3 +42,45 @@ SELECT EXISTS (
       AND token.revoked_at IS NULL
       AND token.expires_at > clock_timestamp()
 ) AS valid;
+
+-- name: PruneBookingEmailVerificationSendAttempts :exec
+DELETE FROM booking_verification_send_attempts
+WHERE booking_id = sqlc.arg(booking_id)
+  AND created_at <= sqlc.arg(prune_before)::timestamptz - INTERVAL '1 hour';
+
+-- name: UpsertBookingEmailVerificationChallenge :exec
+INSERT INTO booking_verification_challenges (
+    booking_id, code_digest, expires_at, failed_attempts, consumed_at, updated_at
+)
+VALUES ($1, $2, $3, 0, NULL, clock_timestamp())
+ON CONFLICT (booking_id) DO UPDATE
+SET code_digest = EXCLUDED.code_digest,
+    expires_at = EXCLUDED.expires_at,
+    failed_attempts = 0,
+    consumed_at = NULL,
+    updated_at = clock_timestamp();
+
+-- name: RecordBookingEmailVerificationSendAttempt :exec
+INSERT INTO booking_verification_send_attempts (booking_id, created_at)
+VALUES ($1, clock_timestamp());
+
+-- name: RecordRejectedBookingEmailVerificationAttempt :exec
+UPDATE booking_verification_challenges
+SET failed_attempts = failed_attempts + 1,
+    consumed_at = CASE
+        WHEN failed_attempts + 1 >= $2 THEN clock_timestamp()
+        ELSE consumed_at
+    END,
+    updated_at = clock_timestamp()
+WHERE booking_id = $1;
+
+-- name: ConsumeBookingEmailVerificationChallenge :execrows
+UPDATE booking_verification_challenges
+SET consumed_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE booking_id = $1
+  AND consumed_at IS NULL
+  AND expires_at > clock_timestamp();
+
+-- name: CreateBookingToken :exec
+INSERT INTO booking_tokens (booking_id, token_digest, expires_at)
+VALUES ($1, $2, $3);

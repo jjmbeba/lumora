@@ -35,43 +35,13 @@ func (s *EmailOutboxStore) ClaimNextTicketEmail(ctx context.Context, leaseDurati
 		return ticket.TicketEmailJob{}, false, errors.New("ticket email lease duration must be at least one microsecond")
 	}
 
-	const claimNextEmail = `
-		WITH candidate AS (
-			SELECT id
-			FROM email_outbox
-			WHERE kind = 'BOOKING_TICKETS'
-				AND (
-					(status = 'QUEUED' AND next_attempt_at <= clock_timestamp())
-					OR (status = 'SENDING' AND lease_expires_at <= clock_timestamp())
-				)
-			ORDER BY next_attempt_at, id
-			LIMIT 1
-			FOR UPDATE SKIP LOCKED
-		)
-		UPDATE email_outbox AS eo
-		SET status = 'SENDING',
-			attempt_count = eo.attempt_count + 1,
-			lease_expires_at = clock_timestamp() + ($1::bigint * interval '1 microsecond'),
-			updated_at = clock_timestamp()
-		FROM candidate
-		WHERE eo.id = candidate.id
-		RETURNING eo.id, eo.booking_id, eo.recipient_email, eo.event_key, eo.attempt_count
-	`
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ticket.TicketEmailJob{}, false, fmt.Errorf("begin ticket email claim: %w", err)
 	}
 	defer tx.Rollback()
 
-	var job ticket.TicketEmailJob
-	err = tx.QueryRowContext(ctx, claimNextEmail, leaseDuration.Microseconds()).Scan(
-		&job.ID,
-		&job.BookingID,
-		&job.Recipient,
-		&job.EventKey,
-		&job.AttemptCount,
-	)
+	row, err := dbgen.New(tx).ClaimNextTicketEmail(ctx, leaseDuration.Microseconds())
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return ticket.TicketEmailJob{}, false, nil
@@ -79,6 +49,10 @@ func (s *EmailOutboxStore) ClaimNextTicketEmail(ctx context.Context, leaseDurati
 	if err != nil {
 		return ticket.TicketEmailJob{}, false, fmt.Errorf("claim next ticket email: %w", err)
 	}
+	if !row.BookingID.Valid {
+		return ticket.TicketEmailJob{}, false, errors.New("claimed ticket email has no booking ID")
+	}
+	job := ticket.TicketEmailJob{ID: int(row.ID), BookingID: int(row.BookingID.Int32), Recipient: row.RecipientEmail, EventKey: row.EventKey, AttemptCount: int(row.AttemptCount)}
 
 	if err := tx.Commit(); err != nil {
 		return ticket.TicketEmailJob{}, false, fmt.Errorf("commit ticket email claim: %w", err)
@@ -130,19 +104,7 @@ func (s *EmailOutboxStore) LoadTicketEmail(ctx context.Context, job ticket.Ticke
 }
 
 func (s *EmailOutboxStore) MarkTicketEmailSent(ctx context.Context, job ticket.TicketEmailJob) error {
-	const markSent = `
-		UPDATE email_outbox
-		SET status = 'SENT',
-			lease_expires_at = NULL,
-			last_error_code = NULL,
-			sent_at = clock_timestamp(),
-			updated_at = clock_timestamp()
-		WHERE id = $1 AND status = 'SENDING' AND attempt_count = $2
-		RETURNING id
-	`
-
-	var id int
-	err := s.db.QueryRowContext(ctx, markSent, job.ID, job.AttemptCount).Scan(&id)
+	_, err := dbgen.New(s.db).MarkTicketEmailSent(ctx, dbgen.MarkTicketEmailSentParams{ID: int32(job.ID), AttemptCount: int32(job.AttemptCount)})
 	if errors.Is(err, sql.ErrNoRows) {
 		return ticket.ErrEmailClaimLost
 	}
@@ -155,19 +117,9 @@ func (s *EmailOutboxStore) MarkTicketEmailSent(ctx context.Context, job ticket.T
 }
 
 func (s *EmailOutboxStore) RetryTicketEmail(ctx context.Context, job ticket.TicketEmailJob, retryAt time.Time, terminal bool) error {
-	const retry = `
-		UPDATE email_outbox
-		SET status = CASE WHEN $3 THEN 'FAILED'::"EmailOutboxStatus" ELSE 'QUEUED'::"EmailOutboxStatus" END,
-			next_attempt_at = CASE WHEN $3 THEN clock_timestamp() ELSE $4 END,
-			lease_expires_at = NULL,
-			last_error_code = 'DELIVERY_FAILED',
-			updated_at = clock_timestamp()
-		WHERE id = $1 AND status = 'SENDING' AND attempt_count = $2
-		RETURNING id
-	`
-
-	var id int
-	err := s.db.QueryRowContext(ctx, retry, job.ID, job.AttemptCount, terminal, retryAt).Scan(&id)
+	_, err := dbgen.New(s.db).RetryTicketEmail(ctx, dbgen.RetryTicketEmailParams{
+		Terminal: terminal, NextAttemptAt: retryAt, ID: int32(job.ID), AttemptCount: int32(job.AttemptCount),
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return ticket.ErrEmailClaimLost

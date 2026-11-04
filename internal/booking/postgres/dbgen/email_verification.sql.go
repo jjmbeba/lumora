@@ -10,6 +10,38 @@ import (
 	"time"
 )
 
+const consumeBookingEmailVerificationChallenge = `-- name: ConsumeBookingEmailVerificationChallenge :execrows
+UPDATE booking_verification_challenges
+SET consumed_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE booking_id = $1
+  AND consumed_at IS NULL
+  AND expires_at > clock_timestamp()
+`
+
+func (q *Queries) ConsumeBookingEmailVerificationChallenge(ctx context.Context, bookingID int32) (int64, error) {
+	result, err := q.db.ExecContext(ctx, consumeBookingEmailVerificationChallenge, bookingID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createBookingToken = `-- name: CreateBookingToken :exec
+INSERT INTO booking_tokens (booking_id, token_digest, expires_at)
+VALUES ($1, $2, $3)
+`
+
+type CreateBookingTokenParams struct {
+	BookingID   int32
+	TokenDigest []byte
+	ExpiresAt   time.Time
+}
+
+func (q *Queries) CreateBookingToken(ctx context.Context, arg CreateBookingTokenParams) error {
+	_, err := q.db.ExecContext(ctx, createBookingToken, arg.BookingID, arg.TokenDigest, arg.ExpiresAt)
+	return err
+}
+
 const getEmailVerificationSendLimits = `-- name: GetEmailVerificationSendLimits :one
 WITH database_time AS MATERIALIZED (
     SELECT clock_timestamp()::timestamptz AS now
@@ -97,6 +129,77 @@ func (q *Queries) LockEmailVerificationChallenge(ctx context.Context, bookingID 
 		&i.IsUnconsumed,
 	)
 	return i, err
+}
+
+const pruneBookingEmailVerificationSendAttempts = `-- name: PruneBookingEmailVerificationSendAttempts :exec
+DELETE FROM booking_verification_send_attempts
+WHERE booking_id = $1
+  AND created_at <= $2::timestamptz - INTERVAL '1 hour'
+`
+
+type PruneBookingEmailVerificationSendAttemptsParams struct {
+	BookingID   int32
+	PruneBefore time.Time
+}
+
+func (q *Queries) PruneBookingEmailVerificationSendAttempts(ctx context.Context, arg PruneBookingEmailVerificationSendAttemptsParams) error {
+	_, err := q.db.ExecContext(ctx, pruneBookingEmailVerificationSendAttempts, arg.BookingID, arg.PruneBefore)
+	return err
+}
+
+const recordBookingEmailVerificationSendAttempt = `-- name: RecordBookingEmailVerificationSendAttempt :exec
+INSERT INTO booking_verification_send_attempts (booking_id, created_at)
+VALUES ($1, clock_timestamp())
+`
+
+func (q *Queries) RecordBookingEmailVerificationSendAttempt(ctx context.Context, bookingID int32) error {
+	_, err := q.db.ExecContext(ctx, recordBookingEmailVerificationSendAttempt, bookingID)
+	return err
+}
+
+const recordRejectedBookingEmailVerificationAttempt = `-- name: RecordRejectedBookingEmailVerificationAttempt :exec
+UPDATE booking_verification_challenges
+SET failed_attempts = failed_attempts + 1,
+    consumed_at = CASE
+        WHEN failed_attempts + 1 >= $2 THEN clock_timestamp()
+        ELSE consumed_at
+    END,
+    updated_at = clock_timestamp()
+WHERE booking_id = $1
+`
+
+type RecordRejectedBookingEmailVerificationAttemptParams struct {
+	BookingID      int32
+	FailedAttempts int16
+}
+
+func (q *Queries) RecordRejectedBookingEmailVerificationAttempt(ctx context.Context, arg RecordRejectedBookingEmailVerificationAttemptParams) error {
+	_, err := q.db.ExecContext(ctx, recordRejectedBookingEmailVerificationAttempt, arg.BookingID, arg.FailedAttempts)
+	return err
+}
+
+const upsertBookingEmailVerificationChallenge = `-- name: UpsertBookingEmailVerificationChallenge :exec
+INSERT INTO booking_verification_challenges (
+    booking_id, code_digest, expires_at, failed_attempts, consumed_at, updated_at
+)
+VALUES ($1, $2, $3, 0, NULL, clock_timestamp())
+ON CONFLICT (booking_id) DO UPDATE
+SET code_digest = EXCLUDED.code_digest,
+    expires_at = EXCLUDED.expires_at,
+    failed_attempts = 0,
+    consumed_at = NULL,
+    updated_at = clock_timestamp()
+`
+
+type UpsertBookingEmailVerificationChallengeParams struct {
+	BookingID  int32
+	CodeDigest []byte
+	ExpiresAt  time.Time
+}
+
+func (q *Queries) UpsertBookingEmailVerificationChallenge(ctx context.Context, arg UpsertBookingEmailVerificationChallengeParams) error {
+	_, err := q.db.ExecContext(ctx, upsertBookingEmailVerificationChallenge, arg.BookingID, arg.CodeDigest, arg.ExpiresAt)
+	return err
 }
 
 const validateBookingToken = `-- name: ValidateBookingToken :one

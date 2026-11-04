@@ -7,8 +7,50 @@ package dbgen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
+
+const cancelExpiredBooking = `-- name: CancelExpiredBooking :exec
+UPDATE bookings
+SET status = 'CANCELLED'
+WHERE id = $1 AND status = 'RESERVED'
+`
+
+func (q *Queries) CancelExpiredBooking(ctx context.Context, id int32) error {
+	_, err := q.db.ExecContext(ctx, cancelExpiredBooking, id)
+	return err
+}
+
+const cancelExpiredBookingAfterRejectedInitialization = `-- name: CancelExpiredBookingAfterRejectedInitialization :one
+UPDATE bookings SET status = 'CANCELLED'
+WHERE bookings.id = $1 AND EXISTS (
+    SELECT 1 FROM payment_attempts AS pa
+    WHERE pa.booking_id = $1 AND pa.status = 'PENDING'
+      AND (SELECT pi.status FROM payment_initializations AS pi
+           WHERE pi.payment_attempt_id = pa.id
+           ORDER BY pi.created_at DESC, pi.id DESC LIMIT 1) = 'REJECTED'
+)
+RETURNING bookings.id
+`
+
+func (q *Queries) CancelExpiredBookingAfterRejectedInitialization(ctx context.Context, id int32) (int32, error) {
+	row := q.db.QueryRowContext(ctx, cancelExpiredBookingAfterRejectedInitialization, id)
+	var id_2 int32
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const cancelExpiredPaymentAttempt = `-- name: CancelExpiredPaymentAttempt :exec
+UPDATE payment_attempts
+SET status = 'CANCELLED'
+WHERE booking_id = $1 AND status = 'PENDING'
+`
+
+func (q *Queries) CancelExpiredPaymentAttempt(ctx context.Context, bookingID int32) error {
+	_, err := q.db.ExecContext(ctx, cancelExpiredPaymentAttempt, bookingID)
+	return err
+}
 
 const claimNextPaymentInitialization = `-- name: ClaimNextPaymentInitialization :one
 SELECT pi.id AS initialization_id, pi.status::text AS previous_status,
@@ -50,6 +92,107 @@ func (q *Queries) ClaimNextPaymentInitialization(ctx context.Context) (ClaimNext
 		&i.CustomerPhone,
 	)
 	return i, err
+}
+
+const claimPaymentInitialization = `-- name: ClaimPaymentInitialization :one
+UPDATE payment_initializations
+SET status = 'SUBMITTING',
+    worker_attempt_count = worker_attempt_count + 1,
+    next_attempt_at = NULL,
+lease_expires_at = clock_timestamp() + ($1::double precision * interval '1 microsecond'),
+    updated_at = clock_timestamp()
+WHERE id = $2
+RETURNING worker_attempt_count
+`
+
+type ClaimPaymentInitializationParams struct {
+	LeaseMicros float64
+	ID          int32
+}
+
+func (q *Queries) ClaimPaymentInitialization(ctx context.Context, arg ClaimPaymentInitializationParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, claimPaymentInitialization, arg.LeaseMicros, arg.ID)
+	var worker_attempt_count int32
+	err := row.Scan(&worker_attempt_count)
+	return worker_attempt_count, err
+}
+
+const createPaymentAttempt = `-- name: CreatePaymentAttempt :one
+INSERT INTO payment_attempts (booking_id, status, amount, currency, created_at)
+VALUES ($1, 'PENDING', $2, $3, clock_timestamp())
+ON CONFLICT (booking_id) DO NOTHING
+RETURNING id, status::text AS status
+`
+
+type CreatePaymentAttemptParams struct {
+	BookingID int32
+	Amount    int32
+	Currency  string
+}
+
+type CreatePaymentAttemptRow struct {
+	ID     int32
+	Status string
+}
+
+func (q *Queries) CreatePaymentAttempt(ctx context.Context, arg CreatePaymentAttemptParams) (CreatePaymentAttemptRow, error) {
+	row := q.db.QueryRowContext(ctx, createPaymentAttempt, arg.BookingID, arg.Amount, arg.Currency)
+	var i CreatePaymentAttemptRow
+	err := row.Scan(&i.ID, &i.Status)
+	return i, err
+}
+
+const createPaymentInitialization = `-- name: CreatePaymentInitialization :one
+INSERT INTO payment_initializations (
+    payment_attempt_id, paystack_reference, payment_method, status, created_at, updated_at
+)
+VALUES ($1, $2, $3, 'QUEUED', clock_timestamp(), clock_timestamp())
+RETURNING id, status::text AS status, payment_method::text AS payment_method,
+          paystack_reference, COALESCE(authorization_url, '') AS authorization_url
+`
+
+type CreatePaymentInitializationParams struct {
+	PaymentAttemptID  int32
+	PaystackReference string
+	PaymentMethod     PaymentMethod
+}
+
+type CreatePaymentInitializationRow struct {
+	ID                int32
+	Status            string
+	PaymentMethod     string
+	PaystackReference string
+	AuthorizationUrl  string
+}
+
+func (q *Queries) CreatePaymentInitialization(ctx context.Context, arg CreatePaymentInitializationParams) (CreatePaymentInitializationRow, error) {
+	row := q.db.QueryRowContext(ctx, createPaymentInitialization, arg.PaymentAttemptID, arg.PaystackReference, arg.PaymentMethod)
+	var i CreatePaymentInitializationRow
+	err := row.Scan(
+		&i.ID,
+		&i.Status,
+		&i.PaymentMethod,
+		&i.PaystackReference,
+		&i.AuthorizationUrl,
+	)
+	return i, err
+}
+
+const enqueueTicketEmail = `-- name: EnqueueTicketEmail :exec
+INSERT INTO email_outbox (event_key, kind, recipient_email, booking_id)
+VALUES ($1, 'BOOKING_TICKETS', $2, $3)
+ON CONFLICT (booking_id) WHERE kind = 'BOOKING_TICKETS' DO NOTHING
+`
+
+type EnqueueTicketEmailParams struct {
+	EventKey       string
+	RecipientEmail string
+	BookingID      sql.NullInt32
+}
+
+func (q *Queries) EnqueueTicketEmail(ctx context.Context, arg EnqueueTicketEmailParams) error {
+	_, err := q.db.ExecContext(ctx, enqueueTicketEmail, arg.EventKey, arg.RecipientEmail, arg.BookingID)
+	return err
 }
 
 const getBookingPriceSnapshotTotals = `-- name: GetBookingPriceSnapshotTotals :one
@@ -110,7 +253,7 @@ FROM payment_initializations AS pi
 JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
 JOIN bookings AS b ON b.id = pa.booking_id
 WHERE b.booking_reference = $1
-ORDER BY pi.id DESC
+ORDER BY pi.created_at DESC, pi.id DESC
 LIMIT 1
 `
 
@@ -133,6 +276,33 @@ func (q *Queries) GetLatestInitializationForBooking(ctx context.Context, booking
 		&i.AuthorizationUrl,
 	)
 	return i, err
+}
+
+const insertTicket = `-- name: InsertTicket :exec
+INSERT INTO tickets (
+    booking_id, seat_id, credential_digest, credential_ciphertext, credential_key_version
+)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (booking_id, seat_id) DO NOTHING
+`
+
+type InsertTicketParams struct {
+	BookingID            int32
+	SeatID               int32
+	CredentialDigest     []byte
+	CredentialCiphertext []byte
+	CredentialKeyVersion int16
+}
+
+func (q *Queries) InsertTicket(ctx context.Context, arg InsertTicketParams) error {
+	_, err := q.db.ExecContext(ctx, insertTicket,
+		arg.BookingID,
+		arg.SeatID,
+		arg.CredentialDigest,
+		arg.CredentialCiphertext,
+		arg.CredentialKeyVersion,
+	)
+	return err
 }
 
 const loadInitializationReceiptByKey = `-- name: LoadInitializationReceiptByKey :one
@@ -179,7 +349,7 @@ SELECT id, status::text AS status, payment_method::text AS payment_method,
        paystack_reference, COALESCE(authorization_url, '') AS authorization_url
 FROM payment_initializations
 WHERE payment_attempt_id = $1
-ORDER BY id DESC
+ORDER BY created_at DESC, id DESC
 LIMIT 1
 `
 
@@ -231,7 +401,7 @@ JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
 JOIN bookings AS b ON b.id = pa.booking_id
 WHERE b.booking_reference = $1
   AND pi.status IN ('QUEUED', 'SUBMITTING', 'READY', 'UNKNOWN', 'REVIEW_REQUIRED')
-ORDER BY pi.id DESC
+ORDER BY pi.created_at DESC, pi.id DESC
 LIMIT 1
 `
 
@@ -401,6 +571,285 @@ FOR UPDATE
 
 func (q *Queries) LockExpiredBookingByReference(ctx context.Context, bookingReference string) (int32, error) {
 	row := q.db.QueryRowContext(ctx, lockExpiredBookingByReference, bookingReference)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
+}
+
+const markPaymentInitializationCancelled = `-- name: MarkPaymentInitializationCancelled :execrows
+UPDATE payment_initializations
+SET status = 'CANCELLED', lease_expires_at = NULL,
+    next_attempt_at = NULL, updated_at = clock_timestamp()
+WHERE id = $1 AND status = 'SUBMITTING'
+  AND worker_attempt_count = $2
+`
+
+type MarkPaymentInitializationCancelledParams struct {
+	ID                 int32
+	WorkerAttemptCount int32
+}
+
+func (q *Queries) MarkPaymentInitializationCancelled(ctx context.Context, arg MarkPaymentInitializationCancelledParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markPaymentInitializationCancelled, arg.ID, arg.WorkerAttemptCount)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markPaymentInitializationReady = `-- name: MarkPaymentInitializationReady :execrows
+UPDATE payment_initializations
+SET status = 'READY',
+    authorization_url = $1,
+    lease_expires_at = NULL,
+    next_attempt_at = CASE WHEN EXISTS (
+        SELECT 1 FROM webhook_inbox AS wi
+        WHERE wi.reference = payment_initializations.paystack_reference
+          AND wi.event_type = 'charge.success'
+    ) THEN clock_timestamp() ELSE LEAST(
+        $2::timestamptz,
+        (SELECT b.hold_expires_at
+         FROM payment_attempts AS pa
+         JOIN bookings AS b ON b.id = pa.booking_id
+         WHERE pa.id = payment_initializations.payment_attempt_id)
+    ) END,
+    updated_at = clock_timestamp()
+WHERE payment_initializations.id = $3 AND status = 'SUBMITTING' AND worker_attempt_count = $4
+`
+
+type MarkPaymentInitializationReadyParams struct {
+	AuthorizationUrl   sql.NullString
+	NextAttemptAt      time.Time
+	ID                 int32
+	WorkerAttemptCount int32
+}
+
+func (q *Queries) MarkPaymentInitializationReady(ctx context.Context, arg MarkPaymentInitializationReadyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markPaymentInitializationReady,
+		arg.AuthorizationUrl,
+		arg.NextAttemptAt,
+		arg.ID,
+		arg.WorkerAttemptCount,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markPaymentInitializationRejected = `-- name: MarkPaymentInitializationRejected :execrows
+UPDATE payment_initializations
+SET status = 'REJECTED', rejection_reason = $1,
+    lease_expires_at = NULL, next_attempt_at = NULL, updated_at = clock_timestamp()
+WHERE id = $2 AND status = 'SUBMITTING'
+  AND worker_attempt_count = $3
+`
+
+type MarkPaymentInitializationRejectedParams struct {
+	RejectionReason    sql.NullString
+	ID                 int32
+	WorkerAttemptCount int32
+}
+
+func (q *Queries) MarkPaymentInitializationRejected(ctx context.Context, arg MarkPaymentInitializationRejectedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markPaymentInitializationRejected, arg.RejectionReason, arg.ID, arg.WorkerAttemptCount)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const moveBookingToPaymentReview = `-- name: MoveBookingToPaymentReview :exec
+UPDATE bookings
+SET status = 'PAYMENT_REVIEW'
+WHERE bookings.id = (SELECT pa.booking_id FROM payment_attempts AS pa WHERE pa.id = $1)
+  AND bookings.status <> 'CANCELLED'
+`
+
+func (q *Queries) MoveBookingToPaymentReview(ctx context.Context, id int32) error {
+	_, err := q.db.ExecContext(ctx, moveBookingToPaymentReview, id)
+	return err
+}
+
+const moveCancelledInitializationToReview = `-- name: MoveCancelledInitializationToReview :one
+UPDATE payment_initializations
+SET status = 'REVIEW_REQUIRED', lease_expires_at = NULL,
+    next_attempt_at = NULL, updated_at = clock_timestamp()
+WHERE paystack_reference = $1 AND status = 'CANCELLED'
+RETURNING payment_attempt_id
+`
+
+func (q *Queries) MoveCancelledInitializationToReview(ctx context.Context, paystackReference string) (int32, error) {
+	row := q.db.QueryRowContext(ctx, moveCancelledInitializationToReview, paystackReference)
+	var payment_attempt_id int32
+	err := row.Scan(&payment_attempt_id)
+	return payment_attempt_id, err
+}
+
+const recordWebhookEvent = `-- name: RecordWebhookEvent :exec
+INSERT INTO webhook_inbox (event_type, transaction_id, reference, receipt_time, provider_paid_at, provider_status)
+VALUES ($1, $2, $3, clock_timestamp(), $4, $5)
+ON CONFLICT (reference) DO NOTHING
+`
+
+type RecordWebhookEventParams struct {
+	EventType      string
+	TransactionID  int64
+	Reference      string
+	ProviderPaidAt time.Time
+	ProviderStatus string
+}
+
+func (q *Queries) RecordWebhookEvent(ctx context.Context, arg RecordWebhookEventParams) error {
+	_, err := q.db.ExecContext(ctx, recordWebhookEvent,
+		arg.EventType,
+		arg.TransactionID,
+		arg.Reference,
+		arg.ProviderPaidAt,
+		arg.ProviderStatus,
+	)
+	return err
+}
+
+const releaseBookingSeatClaims = `-- name: ReleaseBookingSeatClaims :exec
+DELETE FROM seat_claims WHERE booking_id = $1
+`
+
+func (q *Queries) ReleaseBookingSeatClaims(ctx context.Context, bookingID int32) error {
+	_, err := q.db.ExecContext(ctx, releaseBookingSeatClaims, bookingID)
+	return err
+}
+
+const savePaymentInitializationReceipt = `-- name: SavePaymentInitializationReceipt :execrows
+INSERT INTO payment_initialization_receipts (
+    idempotency_key, request_fingerprint, requested_payment_method, payment_initialization_id
+)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (idempotency_key) DO NOTHING
+`
+
+type SavePaymentInitializationReceiptParams struct {
+	IdempotencyKey          string
+	RequestFingerprint      string
+	RequestedPaymentMethod  PaymentMethod
+	PaymentInitializationID int32
+}
+
+func (q *Queries) SavePaymentInitializationReceipt(ctx context.Context, arg SavePaymentInitializationReceiptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, savePaymentInitializationReceipt,
+		arg.IdempotencyKey,
+		arg.RequestFingerprint,
+		arg.RequestedPaymentMethod,
+		arg.PaymentInitializationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const schedulePaymentVerification = `-- name: SchedulePaymentVerification :execrows
+UPDATE payment_initializations
+SET status = $1::"PaymentInitializationStatus",
+    lease_expires_at = NULL,
+    next_attempt_at = CASE WHEN $2::boolean THEN clock_timestamp() ELSE LEAST($3::timestamptz, $4::timestamptz) END,
+    updated_at = clock_timestamp()
+WHERE payment_initializations.id = $5 AND status = 'SUBMITTING' AND worker_attempt_count = $6
+`
+
+type SchedulePaymentVerificationParams struct {
+	Status             PaymentInitializationStatus
+	Immediate          bool
+	NextAttemptAt      time.Time
+	HoldExpiresAt      time.Time
+	ID                 int32
+	WorkerAttemptCount int32
+}
+
+func (q *Queries) SchedulePaymentVerification(ctx context.Context, arg SchedulePaymentVerificationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, schedulePaymentVerification,
+		arg.Status,
+		arg.Immediate,
+		arg.NextAttemptAt,
+		arg.HoldExpiresAt,
+		arg.ID,
+		arg.WorkerAttemptCount,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const scheduleVerificationFromWebhook = `-- name: ScheduleVerificationFromWebhook :exec
+UPDATE payment_initializations
+SET next_attempt_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE paystack_reference = $1 AND status IN ('READY', 'UNKNOWN')
+`
+
+func (q *Queries) ScheduleVerificationFromWebhook(ctx context.Context, paystackReference string) error {
+	_, err := q.db.ExecContext(ctx, scheduleVerificationFromWebhook, paystackReference)
+	return err
+}
+
+const updateBookingStatus = `-- name: UpdateBookingStatus :one
+UPDATE bookings
+SET status = $1::"BookingStatus"
+WHERE bookings.id = $2 AND status = $3::"BookingStatus"
+RETURNING id
+`
+
+type UpdateBookingStatusParams struct {
+	Status         BookingStatus
+	ID             int32
+	PreviousStatus BookingStatus
+}
+
+func (q *Queries) UpdateBookingStatus(ctx context.Context, arg UpdateBookingStatusParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, updateBookingStatus, arg.Status, arg.ID, arg.PreviousStatus)
+	var id int32
+	err := row.Scan(&id)
+	return id, err
+}
+
+const updateClaimedPaymentInitializationStatus = `-- name: UpdateClaimedPaymentInitializationStatus :one
+UPDATE payment_initializations
+SET status = $1::"PaymentInitializationStatus",
+    lease_expires_at = NULL,
+    next_attempt_at = NULL,
+    updated_at = clock_timestamp()
+WHERE payment_initializations.id = $2 AND status = 'SUBMITTING' AND worker_attempt_count = $3
+RETURNING payment_attempt_id
+`
+
+type UpdateClaimedPaymentInitializationStatusParams struct {
+	Status             PaymentInitializationStatus
+	ID                 int32
+	WorkerAttemptCount int32
+}
+
+func (q *Queries) UpdateClaimedPaymentInitializationStatus(ctx context.Context, arg UpdateClaimedPaymentInitializationStatusParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, updateClaimedPaymentInitializationStatus, arg.Status, arg.ID, arg.WorkerAttemptCount)
+	var payment_attempt_id int32
+	err := row.Scan(&payment_attempt_id)
+	return payment_attempt_id, err
+}
+
+const updatePaymentAttemptStatus = `-- name: UpdatePaymentAttemptStatus :one
+UPDATE payment_attempts
+SET status = $1::"PaymentStatus"
+WHERE payment_attempts.id = $2 AND status = $3::"PaymentStatus"
+RETURNING id
+`
+
+type UpdatePaymentAttemptStatusParams struct {
+	Status         PaymentStatus
+	ID             int32
+	PreviousStatus PaymentStatus
+}
+
+func (q *Queries) UpdatePaymentAttemptStatus(ctx context.Context, arg UpdatePaymentAttemptStatusParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, updatePaymentAttemptStatus, arg.Status, arg.ID, arg.PreviousStatus)
 	var id int32
 	err := row.Scan(&id)
 	return id, err
