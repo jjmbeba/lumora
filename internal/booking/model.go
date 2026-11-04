@@ -43,8 +43,15 @@ type ScreeningDetails struct {
 }
 
 type BookingSeatDetail struct {
-	Label                string `json:"label"`
-	UnitPriceAmountMinor int64  `json:"unit_price_amount_minor"`
+	Label                string                `json:"label"`
+	UnitPriceAmountMinor int64                 `json:"unit_price_amount_minor"`
+	Ticket               *BookingTicketDetails `json:"ticket,omitempty"`
+}
+
+// BookingTicketDetails contains the bearer value encoded in the admission QR.
+// It is returned only by the email-verified booking-details endpoint.
+type BookingTicketDetails struct {
+	QRCodeValue string `json:"qr_code_value"`
 }
 
 type CreateBookingRequest struct {

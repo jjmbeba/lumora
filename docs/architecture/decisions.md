@@ -27,6 +27,27 @@ Accepted decisions for the project. `CONTEXT.md` remains the concise resume guid
 - Initialization states are `QUEUED`, `SUBMITTING`, `READY`, `FAILED`, `REJECTED`, `UNKNOWN`, `CANCELLED`, and `REVIEW_REQUIRED`. `FAILED` means Paystack verification confirmed a terminal failed payment; it is distinct from `REJECTED`, which means Paystack confirmed that no checkout was created. `CANCELLED` is reserved for an explicit cancellation outcome, not Paystack `abandoned`. `REVIEW_REQUIRED` quarantines conflicting, reversed, or unresolved-after-hold outcomes; workers do not claim it.
 - Use `payment_initializations` as the durable queue for this provider job in the first version; no separate outbox table.
 - Keep payment work database-backed in v1. Reconsider Redis Streams for v2 if the product grows into multiple asynchronous workflows that need independent consumer groups and replay—for example, a confirmed booking must reliably fan out to ticket issuance, customer notifications, and analytics, each scaling and recovering independently. In that design, write an outbox event in the same PostgreSQL transaction as the booking/payment state change, then publish it to Redis Streams; consumers must remain idempotent. PostgreSQL remains the source of truth for bookings and payments, and Redis must not become a second authority for payment status. Do not add Streams just to implement the current single payment-initialization worker.
+- Issue exactly one ticket per booked seat when a booking becomes `BOOKED`. Ticket creation belongs in the same PostgreSQL transaction as the payment/booking success transition, so retries cannot leave a booked seat without a ticket or issue duplicate tickets. A ticket identifies its booking and seat; review-required or cancelled bookings do not receive tickets. Customers can retrieve tickets through the existing email-verified booking-details endpoint, and the system also emails them after confirmation. Send email only after the booking transaction commits; an email failure must not undo a confirmed booking.
+- Keep payment confirmation as the transaction boundary for the v1 booking transition, ticket issuance, and durable confirmation-email job. The existing `MarkPaid` operation coordinates these writes; isolate ticket and email-job persistence in focused helpers rather than introducing a generic transaction framework.
+- Make confirmation email delivery durable: persist a PostgreSQL-backed delivery job in the same transaction that confirms the booking and creates its tickets. A worker sends the email after commit and retries transient failures. Delivery retries must not create tickets or otherwise repeat booking side effects.
+- The ticket email worker claims due `BOOKING_TICKETS` outbox rows with `FOR UPDATE SKIP LOCKED`, increments `attempt_count` as its fencing generation, and recovers expired `SENDING` leases. Its defaults are a 30-second lease, 15-second send timeout, at most 10 attempts, and exponential retry delay with equal jitter from 5 seconds up to 5 minutes; after the final failed attempt, mark the job `FAILED` for operator review. Use the stable `event_key` as Resend's idempotency key to reduce duplicate delivery after ambiguous network failures; PostgreSQL remains the durable queue and delivery is still at least once.
+- Do not create tickets or email jobs for existing `BOOKED` rows in SQL. Before enabling ticket access in a retained environment, use an idempotent application-level backfill to generate encrypted credentials, persist one ticket per booking seat, and enqueue confirmation emails. Disposable local data may be reseeded instead.
+- Send one confirmation email per booking, containing all per-seat tickets and their individual QR codes, rather than sending one email per ticket.
+- Keep each seat's ticket independently shareable and redeemable. Partial group arrival is allowed: scanning one guest's ticket does not consume any other ticket in the booking, so late guests can be admitted with their own unused QR code.
+- Allow ticket redemption at any point through the screening's scheduled `end_time`; there is no short grace period after `start_time`, and tickets cannot be redeemed after the screening ends.
+- Include a QR code on each ticket for admission. A successful staff scan atomically redeems that ticket; subsequent scans report it as already used.
+- Put 32 cryptographically random bytes, encoded as unpadded URL-safe base64, in each ticket QR code. Store SHA-256 of the raw bytes for lookup and AES-256-GCM ciphertext so email retries and booking-details reads can reproduce the stable QR. Bind encryption to the booking and seat IDs as associated data; keep versioned keys outside PostgreSQL. Never store the credential as plaintext. The QR value carries no booking, customer, or seat details and is treated as a bearer secret. Return it in booking details only after validating that booking's short-lived access token, and only when the booking is `BOOKED`.
+- Configure the ticket credential key ring with `TICKET_CREDENTIAL_CURRENT_KEY_VERSION`, a comma-separated `TICKET_CREDENTIAL_KEY_VERSIONS` list, and one matching `TICKET_CREDENTIAL_KEY_<version>` environment variable per retained standard-base64-encoded 32-byte key. The application reads only the listed key variables. Keep prior key versions configured until no persisted ticket requires them.
+- Admit a ticket only when it has not already been redeemed and its booking is still `BOOKED`; a booking moved to review or cancellation cannot be admitted even if a ticket was issued earlier.
+- Require an authenticated staff account to redeem tickets and record which staff member redeemed each ticket for auditability.
+- Create the first owner account through a one-time bootstrap path. Afterward, managers create individual staff accounts through a manager-only frontend flow; do not expose public self-registration.
+- Protect first-owner setup with a high-entropy secret configured outside the database, and disable the bootstrap path immediately after the first owner is created.
+- Authenticate staff with their individual email and password, then issue an expiring revocable session. Store passwords only as adaptive password hashes, never as plaintext. Do not reuse customer booking-access tokens for staff authentication.
+- Keep scanner sessions valid for at most 8 hours, with explicit logout and immediate revocation when an account is deactivated.
+- Expire a scanner session after 15 minutes of inactivity, even if its work-shift maximum has not elapsed.
+- Use two staff roles in v1: `MANAGER` can provision/deactivate staff and redeem tickets; `SCANNER` can redeem tickets only. The first owner account is a manager.
+- When a manager creates a staff account, email a single-use setup link for the new staff member to choose a password; keep the account inactive until setup completes. Deactivating an account revokes its active sessions.
+- Require a live backend connection for ticket scans in v1 so the scan can check current booking status and redeem the ticket atomically; offline admission and later conflict resolution are deferred.
 
 ## Idempotency and provider recovery
 
@@ -39,10 +60,10 @@ Accepted decisions for the project. `CONTEXT.md` remains the concise resume guid
 ## Go structure
 
 - Use one Go module at the repository root and a modular-monolith architecture. Do not split into services without a concrete need.
-- Put executable entry points in `cmd/api` and `cmd/payment-worker`. Keep their behavior in shared internal packages so they can run as separate processes without duplicating rules.
+- Put executable entry points in `cmd/api`, `cmd/payment-worker`, and `cmd/ticket-email-worker`. Keep their behavior in shared internal packages so they can run as separate processes without duplicating rules.
 - Put application implementation under `internal/`, organized around domain responsibilities such as `booking`, `screening`, and `payment`. Use `httpapi`, `config`, and `app` for transport, configuration, and dependency wiring.
 - Keep PostgreSQL adapters near the feature they implement, such as `internal/booking/postgres`. Define small interfaces in the consuming package; concrete implementations satisfy them implicitly.
-- Keep SQL migration files under the root `migrations/` directory. The base schema is in `migrations/migration.sql`; `migrations/webhooks.sql` creates the webhook inbox; `migrations/identity-defaults.sql` upgrades existing integer IDs to identity columns; and `migrations/04-screening-currency.sql` upgrades per-seat currencies to one currency per screening.
+- Keep SQL migration files under the root `migrations/` directory. The base schema is in `migrations/migration.sql`; follow-up migrations add the webhook inbox, identity defaults, screening currency, initialization receipts, booking email verification, and ticket/staff/email-outbox schema.
 - Use `GENERATED BY DEFAULT AS IDENTITY` for surrogate `id` primary keys. Inserts should omit generated IDs and use `RETURNING id` when the caller needs the assigned value. Explicit IDs remain available for fixtures, but do not advance the identity sequence; reseed the sequence or avoid explicit IDs before relying on generated values.
 - Keep the layout lean: do not create packages for every layer or generic `common`, `util`, `types`, or `repository` packages without a concrete need.
 
@@ -53,7 +74,9 @@ Example starting layout (create packages as implementation needs them; this is a
 ├── cmd/
 │   ├── api/
 │   │   └── main.go
-│   └── payment-worker/
+│   ├── payment-worker/
+│   │   └── main.go
+│   └── ticket-email-worker/
 │       └── main.go
 ├── internal/
 │   ├── app/                 # dependency wiring and process setup

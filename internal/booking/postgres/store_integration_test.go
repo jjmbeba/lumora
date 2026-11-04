@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"example.com/cinema-tickets-backend/internal/checkout"
 	"example.com/cinema-tickets-backend/internal/payment"
 	paymentpostgres "example.com/cinema-tickets-backend/internal/payment/postgres"
+	"example.com/cinema-tickets-backend/internal/ticket"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -180,6 +182,71 @@ func TestGetDetailsReturnsSavedBookingAndScreeningSnapshot(t *testing.T) {
 	if got.Seats[0].UnitPriceAmountMinor+got.Seats[1].UnitPriceAmountMinor != got.TotalAmountMinor {
 		t.Errorf("seat prices = %+v, do not sum to total %d", got.Seats, got.TotalAmountMinor)
 	}
+	for _, seat := range got.Seats {
+		if seat.Ticket != nil {
+			t.Errorf("reserved booking unexpectedly includes ticket details for seat %q", seat.Label)
+		}
+	}
+}
+
+func TestGetDetailsReturnsDecryptedTicketCredentialsForBookedSeats(t *testing.T) {
+	db, store, fixture := newBookingIntegrationFixture(t)
+	created, err := store.Create(context.Background(), fixture.params("booked-ticket-details"))
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	var bookingID int
+	if err := db.QueryRowContext(context.Background(), `
+		UPDATE bookings
+		SET status = 'BOOKED'
+		WHERE booking_reference = $1
+		RETURNING id
+	`, created.Reference).Scan(&bookingID); err != nil {
+		t.Fatalf("mark test booking booked: %v", err)
+	}
+
+	wantCredentials := make(map[string]string, 2)
+	for _, seatID := range fixture.seatIDs[:2] {
+		var label string
+		if err := db.QueryRowContext(context.Background(), `SELECT label FROM seats WHERE id = $1`, seatID).Scan(&label); err != nil {
+			t.Fatalf("load seat label: %v", err)
+		}
+		stored, err := store.ticketCredentials.Issue(bookingID, seatID)
+		if err != nil {
+			t.Fatalf("issue test ticket credential: %v", err)
+		}
+		wantCredentials[label], err = store.ticketCredentials.Reveal(bookingID, seatID, stored)
+		if err != nil {
+			t.Fatalf("reveal expected test credential: %v", err)
+		}
+		if _, err := db.ExecContext(context.Background(), `
+			INSERT INTO tickets (booking_id, seat_id, credential_digest, credential_ciphertext, credential_key_version)
+			VALUES ($1, $2, $3, $4, $5)
+		`, bookingID, seatID, stored.Digest, stored.Ciphertext, stored.KeyVersion); err != nil {
+			t.Fatalf("insert test ticket: %v", err)
+		}
+	}
+
+	got, err := store.GetDetails(context.Background(), created.Reference)
+	if err != nil {
+		t.Fatalf("GetDetails() error = %v", err)
+	}
+	if got.Status != booking.BookingStatusBooked {
+		t.Fatalf("booking status = %q, want BOOKED", got.Status)
+	}
+	if len(got.Seats) != len(wantCredentials) {
+		t.Fatalf("seat details = %d, want %d: %+v", len(got.Seats), len(wantCredentials), got.Seats)
+	}
+	for _, seat := range got.Seats {
+		if seat.Ticket == nil {
+			t.Errorf("booked seat %q has no ticket details", seat.Label)
+			continue
+		}
+		if seat.Ticket.QRCodeValue != wantCredentials[seat.Label] {
+			t.Errorf("seat %q QR credential = %q, want its issued credential", seat.Label, seat.Ticket.QRCodeValue)
+		}
+	}
 }
 
 func TestGetDetailsReturnsNotFoundForUnknownReference(t *testing.T) {
@@ -331,7 +398,11 @@ func newBookingIntegrationFixture(t *testing.T) (*sql.DB, *PostgresStore, bookin
 		t.Fatal("booking tables are missing; apply migrations/migration.sql to the test database first")
 	}
 
-	store, err := NewPostgresStore(db)
+	credentialCipher, err := ticket.NewCredentialCipher(map[int16][]byte{1: bytes.Repeat([]byte{0x91}, 32)}, 1)
+	if err != nil {
+		t.Fatalf("create ticket credential cipher: %v", err)
+	}
+	store, err := NewPostgresStore(db, credentialCipher)
 	if err != nil {
 		t.Fatalf("create booking store: %v", err)
 	}
@@ -400,6 +471,8 @@ func (f *bookingIntegrationFixture) seed(t *testing.T) {
 			query string
 			arg   int
 		}{
+			{`DELETE FROM email_outbox WHERE booking_id IN (SELECT id FROM bookings WHERE screening_id = $1)`, f.screeningID},
+			{`DELETE FROM tickets WHERE booking_id IN (SELECT id FROM bookings WHERE screening_id = $1)`, f.screeningID},
 			{`DELETE FROM seat_claims WHERE screening_id = $1`, f.screeningID},
 			{`DELETE FROM bookings_seats WHERE screening_id = $1`, f.screeningID},
 			{`DELETE FROM payment_initializations AS initialization

@@ -14,6 +14,7 @@ services:
       - ./migrations/04-screening-currency.sql:/docker-entrypoint-initdb.d/04-screening-currency.sql:ro
       - ./migrations/05-payment-initialization-receipts.sql:/docker-entrypoint-initdb.d/05-payment-initialization-receipts.sql:ro
       - ./migrations/06-booking-email-verification.sql:/docker-entrypoint-initdb.d/06-booking-email-verification.sql:ro
+      - ./migrations/07-ticketing-staff-email-outbox.sql:/docker-entrypoint-initdb.d/07-ticketing-staff-email-outbox.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cinema_ticketing_test"]
       interval: 2s

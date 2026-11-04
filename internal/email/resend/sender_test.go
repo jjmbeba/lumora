@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/booking"
+	"example.com/cinema-tickets-backend/internal/ticket"
 	resendSDK "github.com/resend/resend-go/v4"
 )
 
@@ -99,6 +101,73 @@ func TestSendVerificationCodeUsesRequestContext(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("SendVerificationCode() did not return after context cancellation")
+	}
+}
+
+func TestSendTicketEmailEmbedsQRsAndUsesIdempotencyKey(t *testing.T) {
+	type attachment struct {
+		Filename    string `json:"filename"`
+		ContentType string `json:"content_type"`
+		ContentID   string `json:"content_id"`
+		Content     []int  `json:"content"`
+	}
+	var got struct {
+		To          []string     `json:"to"`
+		Subject     string       `json:"subject"`
+		Text        string       `json:"text"`
+		HTML        string       `json:"html"`
+		Attachments []attachment `json:"attachments"`
+	}
+	var idempotencyKey string
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		idempotencyKey = r.Header.Get("Idempotency-Key")
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+		return jsonResponse(http.StatusOK, `{"id":"email-test-id"}`), nil
+	})
+
+	sender := newTestResendSender(t, transport)
+	err := sender.SendTicketEmail(context.Background(), ticket.TicketEmail{
+		To:               "customer@example.com",
+		BookingReference: "BOOK-123",
+		IdempotencyKey:   "booking-ticket-email:42",
+		Tickets: []ticket.TicketEmailItem{
+			{SeatLabel: "A&1", Credential: "opaque-ticket-value-1"},
+			{SeatLabel: "A2", Credential: "opaque-ticket-value-2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendTicketEmail() error = %v", err)
+	}
+	if idempotencyKey != "booking-ticket-email:42" {
+		t.Errorf("Idempotency-Key = %q, want booking-ticket-email:42", idempotencyKey)
+	}
+	if len(got.To) != 1 || got.To[0] != "customer@example.com" {
+		t.Errorf("to = %v, want [customer@example.com]", got.To)
+	}
+	if got.Subject != "Your cinema tickets" {
+		t.Errorf("subject = %q, want Your cinema tickets", got.Subject)
+	}
+	if !strings.Contains(got.HTML, "BOOK-123") || !strings.Contains(got.HTML, "A&amp;1") {
+		t.Errorf("HTML body did not render escaped booking and seat details: %q", got.HTML)
+	}
+	if strings.Contains(got.Text, "opaque-ticket-value") {
+		t.Errorf("plain-text body exposed a ticket credential: %q", got.Text)
+	}
+	if len(got.Attachments) != 2 {
+		t.Fatalf("attachment count = %d, want 2", len(got.Attachments))
+	}
+	for i, gotAttachment := range got.Attachments {
+		if gotAttachment.ContentType != "image/png" || gotAttachment.ContentID != fmt.Sprintf("ticket-qr-%d", i+1) {
+			t.Errorf("attachment %d metadata = %q/%q", i+1, gotAttachment.ContentType, gotAttachment.ContentID)
+		}
+		if len(gotAttachment.Content) < 8 || gotAttachment.Content[0] != 137 || gotAttachment.Content[1] != 80 || gotAttachment.Content[2] != 78 || gotAttachment.Content[3] != 71 {
+			t.Errorf("attachment %d does not contain a PNG image", i+1)
+		}
+		if !strings.Contains(got.HTML, "cid:"+gotAttachment.ContentID) {
+			t.Errorf("HTML body does not reference inline attachment %q", gotAttachment.ContentID)
+		}
 	}
 }
 

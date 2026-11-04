@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/payment"
+	"example.com/cinema-tickets-backend/internal/ticket"
+	ticketpostgres "example.com/cinema-tickets-backend/internal/ticket/postgres"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -301,6 +304,7 @@ func TestMarkRejectedPersistsReasonAndClearsScheduling(t *testing.T) {
 func TestMarkPaidUpdatesInitializationAttemptAndBooking(t *testing.T) {
 	db, store := integrationStore(t)
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	addBookingSeat(t, db, rows)
 	claim := rows.claim()
 
 	if err := store.MarkPaid(context.Background(), claim, paidVerification(claim)); err != nil {
@@ -314,12 +318,30 @@ func TestMarkPaidUpdatesInitializationAttemptAndBooking(t *testing.T) {
 	if state.leaseExpiresAt.Valid || state.nextAttemptAt.Valid {
 		t.Errorf("terminal initialization retained scheduling fields: lease=%v next=%v", state.leaseExpiresAt, state.nextAttemptAt)
 	}
+	assertTicketDelivery(t, db, rows, 2, 1)
 }
 
 func TestMarkPaidIsIdempotentWhenAttemptAndBookingAlreadyPaid(t *testing.T) {
 	db, store := integrationStore(t)
 	rows := seedPaymentRows(t, db, "PAID", "BOOKED")
 	claim := rows.claim()
+
+	// Simulate delivery records written by an earlier successful attempt.
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatalf("begin existing delivery records: %v", err)
+	}
+	if err := store.insertTickets(context.Background(), tx, rows.bookingID); err != nil {
+		tx.Rollback()
+		t.Fatalf("insert existing tickets: %v", err)
+	}
+	if err := store.insertEmailTask(context.Background(), tx, rows.bookingID, "test@example.test"); err != nil {
+		tx.Rollback()
+		t.Fatalf("insert existing email task: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("commit existing delivery records: %v", err)
+	}
 
 	if err := store.MarkPaid(context.Background(), claim, paidVerification(claim)); err != nil {
 		t.Fatalf("MarkPaid() error = %v, want idempotent success", err)
@@ -329,6 +351,7 @@ func TestMarkPaidIsIdempotentWhenAttemptAndBookingAlreadyPaid(t *testing.T) {
 	if state.initializationStatus != "PAID" || state.paymentStatus != "PAID" || state.bookingStatus != "BOOKED" {
 		t.Errorf("unexpected idempotent paid state: initialization=%q payment=%q booking=%q", state.initializationStatus, state.paymentStatus, state.bookingStatus)
 	}
+	assertTicketDelivery(t, db, rows, 1, 1)
 }
 
 func TestMarkPaidConflictRollsBackAllChanges(t *testing.T) {
@@ -347,6 +370,137 @@ func TestMarkPaidConflictRollsBackAllChanges(t *testing.T) {
 	}
 	if !state.leaseExpiresAt.Valid {
 		t.Error("rollback cleared the submitting lease")
+	}
+	assertTicketDelivery(t, db, rows, 0, 0)
+}
+
+func TestMarkPaidRollsBackStateAndTicketsWhenEmailTaskCannotBeQueued(t *testing.T) {
+	db, store := integrationStore(t)
+	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	if _, err := db.Exec(`UPDATE bookings SET customer_email = '' WHERE id = $1`, rows.bookingID); err != nil {
+		t.Fatalf("make booking email invalid: %v", err)
+	}
+	claim := rows.claim()
+
+	err := store.MarkPaid(context.Background(), claim, paidVerification(claim))
+	if err == nil {
+		t.Fatal("MarkPaid() error = nil, want email task validation error")
+	}
+
+	state := readPaymentState(t, db, rows)
+	if state.initializationStatus != "SUBMITTING" || state.paymentStatus != "PENDING" || state.bookingStatus != "RESERVED" {
+		t.Errorf("failed delivery transition was not rolled back: initialization=%q payment=%q booking=%q", state.initializationStatus, state.paymentStatus, state.bookingStatus)
+	}
+	assertTicketDelivery(t, db, rows, 0, 0)
+}
+
+func TestTicketEmailOutboxClaimLoadsTicketsAndFencesExpiredWorker(t *testing.T) {
+	db, paymentStore := integrationStore(t)
+	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	claim := rows.claim()
+	if err := paymentStore.MarkPaid(context.Background(), claim, paidVerification(claim)); err != nil {
+		t.Fatalf("MarkPaid() error = %v", err)
+	}
+
+	store, err := ticketpostgres.NewEmailOutboxStore(db, paymentStore.ticketCredentials)
+	if err != nil {
+		t.Fatalf("create email outbox store: %v", err)
+	}
+
+	firstClaim, found, err := store.ClaimNextTicketEmail(context.Background(), 30*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimNextTicketEmail() error = %v", err)
+	}
+	if !found {
+		t.Fatal("ClaimNextTicketEmail() found = false, want a queued ticket email")
+	}
+
+	email, err := store.LoadTicketEmail(context.Background(), firstClaim)
+	if err != nil {
+		t.Fatalf("LoadTicketEmail() error = %v", err)
+	}
+	if email.To != "test@example.test" || email.BookingReference == "" || email.IdempotencyKey != firstClaim.EventKey {
+		t.Errorf("loaded ticket email metadata = %+v", email)
+	}
+	if len(email.Tickets) != 1 || email.Tickets[0].SeatLabel == "" || email.Tickets[0].Credential == "" {
+		t.Errorf("loaded tickets = %+v, want one ticket with seat and credential", email.Tickets)
+	}
+
+	secondClaim, found, err := store.ClaimNextTicketEmail(context.Background(), 30*time.Second)
+	if err != nil {
+		t.Fatalf("second ClaimNextTicketEmail() error = %v", err)
+	}
+	if found {
+		t.Fatalf("second ClaimNextTicketEmail() returned job %+v while first lease is active", secondClaim)
+	}
+
+	if _, err := db.Exec(`UPDATE email_outbox SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE id = $1`, firstClaim.ID); err != nil {
+		t.Fatalf("expire first email lease: %v", err)
+	}
+	secondClaim, found, err = store.ClaimNextTicketEmail(context.Background(), 30*time.Second)
+	if err != nil {
+		t.Fatalf("reclaim expired email: %v", err)
+	}
+	if !found || secondClaim.AttemptCount != firstClaim.AttemptCount+1 {
+		t.Fatalf("reclaimed job = %+v, found=%v; want next generation", secondClaim, found)
+	}
+
+	if err := store.MarkTicketEmailSent(context.Background(), firstClaim); !errors.Is(err, ticket.ErrEmailClaimLost) {
+		t.Fatalf("MarkTicketEmailSent(stale) error = %v, want ErrEmailClaimLost", err)
+	}
+	if err := store.MarkTicketEmailSent(context.Background(), secondClaim); err != nil {
+		t.Fatalf("MarkTicketEmailSent(current) error = %v", err)
+	}
+	if _, found, err := store.ClaimNextTicketEmail(context.Background(), 30*time.Second); err != nil || found {
+		t.Errorf("ClaimNextTicketEmail() after SENT = found %v, err %v; want false, nil", found, err)
+	}
+}
+
+func TestTicketEmailOutboxRetriesThenMovesToFailed(t *testing.T) {
+	db, paymentStore := integrationStore(t)
+	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
+	claim := rows.claim()
+	if err := paymentStore.MarkPaid(context.Background(), claim, paidVerification(claim)); err != nil {
+		t.Fatalf("MarkPaid() error = %v", err)
+	}
+	store, err := ticketpostgres.NewEmailOutboxStore(db, paymentStore.ticketCredentials)
+	if err != nil {
+		t.Fatalf("create email outbox store: %v", err)
+	}
+
+	first, found, err := store.ClaimNextTicketEmail(context.Background(), 30*time.Second)
+	if err != nil || !found {
+		t.Fatalf("ClaimNextTicketEmail() = %+v, %v, %v; want a job", first, found, err)
+	}
+	retryAt := time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond)
+	if err := store.RetryTicketEmail(context.Background(), first, retryAt, false); err != nil {
+		t.Fatalf("RetryTicketEmail(nonterminal) error = %v", err)
+	}
+	var status, errorCode string
+	var storedRetryAt time.Time
+	var lease sql.NullTime
+	if err := db.QueryRow(`SELECT status::text, last_error_code, next_attempt_at, lease_expires_at FROM email_outbox WHERE id = $1`, first.ID).Scan(&status, &errorCode, &storedRetryAt, &lease); err != nil {
+		t.Fatalf("read retry state: %v", err)
+	}
+	if status != "QUEUED" || errorCode != "DELIVERY_FAILED" || !storedRetryAt.Equal(retryAt) || lease.Valid {
+		t.Errorf("retry state = %q/%q/%v/%v", status, errorCode, storedRetryAt, lease)
+	}
+
+	if _, err := db.Exec(`UPDATE email_outbox SET next_attempt_at = clock_timestamp() - interval '1 second' WHERE id = $1`, first.ID); err != nil {
+		t.Fatalf("make retry due: %v", err)
+	}
+	second, found, err := store.ClaimNextTicketEmail(context.Background(), 30*time.Second)
+	if err != nil || !found || second.AttemptCount != first.AttemptCount+1 {
+		t.Fatalf("reclaimed email = %+v, found=%v, err=%v; want next attempt", second, found, err)
+	}
+	if err := store.RetryTicketEmail(context.Background(), second, time.Now().UTC(), true); err != nil {
+		t.Fatalf("RetryTicketEmail(terminal) error = %v", err)
+	}
+	if err := db.QueryRow(`SELECT status::text FROM email_outbox WHERE id = $1`, first.ID).Scan(&status); err != nil {
+		t.Fatalf("read terminal retry state: %v", err)
+	}
+	if status != "FAILED" {
+		t.Errorf("terminal status = %q, want FAILED", status)
 	}
 }
 
@@ -492,7 +646,13 @@ type paymentState struct {
 func integrationStore(t *testing.T) (*sql.DB, *PostgresStore) {
 	t.Helper()
 	db := integrationDatabase(t)
-	store, err := NewPostgresStore(db, 30*time.Second)
+	credentialCipher, err := ticket.NewCredentialCipher(map[int16][]byte{
+		1: bytes.Repeat([]byte{0x91}, 32),
+	}, 1)
+	if err != nil {
+		t.Fatalf("create ticket credential cipher: %v", err)
+	}
+	store, err := NewPostgresStore(db, 30*time.Second, credentialCipher)
 	if err != nil {
 		t.Fatalf("create PostgreSQL store: %v", err)
 	}
@@ -584,6 +744,8 @@ func seedPaymentRows(t *testing.T, db *sql.DB, paymentStatus, bookingStatus stri
 			query string
 			id    int
 		}{
+			{`DELETE FROM email_outbox WHERE booking_id = $1`, rows.bookingID},
+			{`DELETE FROM tickets WHERE booking_id = $1`, rows.bookingID},
 			{`DELETE FROM seat_claims WHERE booking_id = $1`, rows.bookingID},
 			{`DELETE FROM bookings_seats WHERE booking_id = $1`, rows.bookingID},
 			{`DELETE FROM payment_initializations WHERE id = $1`, rows.initializationID},
@@ -612,6 +774,70 @@ func assertSeatClaims(t *testing.T, db *sql.DB, rows paymentRows, want int) {
 	}
 	if count != want {
 		t.Errorf("active seat claim count = %d, want %d", count, want)
+	}
+}
+
+func assertTicketDelivery(t *testing.T, db *sql.DB, rows paymentRows, wantTickets, wantEmailTasks int) {
+	t.Helper()
+	var ticketCount, emailTaskCount int
+	if err := db.QueryRow(`SELECT count(*) FROM tickets WHERE booking_id = $1`, rows.bookingID).Scan(&ticketCount); err != nil {
+		t.Fatalf("count booking tickets: %v", err)
+	}
+	if err := db.QueryRow(`SELECT count(*) FROM email_outbox WHERE booking_id = $1 AND kind = 'BOOKING_TICKETS'`, rows.bookingID).Scan(&emailTaskCount); err != nil {
+		t.Fatalf("count booking ticket email tasks: %v", err)
+	}
+	if ticketCount != wantTickets {
+		t.Errorf("ticket count = %d, want %d", ticketCount, wantTickets)
+	}
+	if emailTaskCount != wantEmailTasks {
+		t.Errorf("ticket email task count = %d, want %d", emailTaskCount, wantEmailTasks)
+	}
+}
+
+func addBookingSeat(t *testing.T, db *sql.DB, rows paymentRows) {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	var seatID int
+	if err := db.QueryRow(`
+		INSERT INTO seats (label, auditorium_id, created_at)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`, fmt.Sprintf("integration-extra-seat-%d", integrationID.Add(1)), rows.auditoriumID, now).Scan(&seatID); err != nil {
+		t.Fatalf("insert additional seat: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, statement := range []struct {
+			query string
+			args  []any
+		}{
+			{`DELETE FROM tickets WHERE booking_id = $1 AND seat_id = $2`, []any{rows.bookingID, seatID}},
+			{`DELETE FROM seat_claims WHERE booking_id = $1 AND seat_id = $2`, []any{rows.bookingID, seatID}},
+			{`DELETE FROM bookings_seats WHERE booking_id = $1 AND seat_id = $2`, []any{rows.bookingID, seatID}},
+			{`DELETE FROM screening_seats WHERE screening_id = $1 AND seat_id = $2`, []any{rows.screeningID, seatID}},
+			{`DELETE FROM seats WHERE id = $1`, []any{seatID}},
+		} {
+			if _, err := db.Exec(statement.query, statement.args...); err != nil {
+				t.Errorf("clean up additional booking seat: %v", err)
+			}
+		}
+	})
+	if _, err := db.Exec(`
+		INSERT INTO screening_seats (screening_id, seat_id, auditorium_id, price_amount)
+		VALUES ($1, $2, $3, $4)
+	`, rows.screeningID, seatID, rows.auditoriumID, 2500); err != nil {
+		t.Fatalf("insert additional screening seat: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO bookings_seats (booking_id, seat_id, screening_id, unit_price_amount, currency)
+		VALUES ($1, $2, $3, $4, $5)
+	`, rows.bookingID, seatID, rows.screeningID, 2500, "KES"); err != nil {
+		t.Fatalf("insert additional booking seat: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO seat_claims (screening_id, seat_id, booking_id)
+		VALUES ($1, $2, $3)
+	`, rows.screeningID, seatID, rows.bookingID); err != nil {
+		t.Fatalf("insert additional seat claim: %v", err)
 	}
 }
 

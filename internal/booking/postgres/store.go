@@ -10,18 +10,23 @@ import (
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/booking"
+	"example.com/cinema-tickets-backend/internal/ticket"
 )
 
 type PostgresStore struct {
-	db *sql.DB
+	db                *sql.DB
+	ticketCredentials *ticket.CredentialCipher
 }
 
-func NewPostgresStore(db *sql.DB) (*PostgresStore, error) {
+func NewPostgresStore(db *sql.DB, ticketCredentials *ticket.CredentialCipher) (*PostgresStore, error) {
 	if db == nil {
 		return nil, errors.New("database pool is required")
 	}
+	if ticketCredentials == nil {
+		return nil, errors.New("ticket credential cipher is required")
+	}
 
-	return &PostgresStore{db: db}, nil
+	return &PostgresStore{db: db, ticketCredentials: ticketCredentials}, nil
 }
 
 func (p *PostgresStore) Create(ctx context.Context, params booking.CreateBookingParams) (booking.Booking, error) {
@@ -205,7 +210,8 @@ func (p *PostgresStore) Create(ctx context.Context, params booking.CreateBooking
 
 func (p *PostgresStore) GetDetails(ctx context.Context, bookingReference string) (booking.BookingDetails, error) {
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT b.booking_reference,
+		SELECT b.id,
+		       b.booking_reference,
 		       b.status::text,
 		       b.hold_expires_at,
 		       s.currency,
@@ -214,14 +220,22 @@ func (p *PostgresStore) GetDetails(ctx context.Context, bookingReference string)
 		       a.name,
 		       s.start_time,
 		       s.end_time,
+		       bs.seat_id,
 		       seat.label,
-		       bs.unit_price_amount
+		       bs.unit_price_amount,
+		       ticket.credential_digest,
+		       ticket.credential_ciphertext,
+		       ticket.credential_key_version
 		FROM bookings AS b
 		JOIN screenings AS s ON s.id = b.screening_id
 		JOIN movies AS m ON m.id = s.movie_id
 		JOIN auditoriums AS a ON a.id = s.auditorium_id
 		JOIN bookings_seats AS bs ON bs.booking_id = b.id
 		JOIN seats AS seat ON seat.id = bs.seat_id
+		LEFT JOIN tickets AS ticket
+		  ON ticket.booking_id = b.id
+		 AND ticket.seat_id = bs.seat_id
+		 AND b.status = 'BOOKED'
 		WHERE b.booking_reference = $1
 		ORDER BY seat.label
 	`, bookingReference)
@@ -233,9 +247,15 @@ func (p *PostgresStore) GetDetails(ctx context.Context, bookingReference string)
 	var details booking.BookingDetails
 	var status string
 	found := false
+
 	for rows.Next() {
 		var seat booking.BookingSeatDetail
+		var bookingID, seatID int
+		var credentialDigest, credentialCiphertext []byte
+		var credentialKeyVersion sql.NullInt64
+
 		if err := rows.Scan(
+			&bookingID,
 			&details.Reference,
 			&status,
 			&details.HoldExpiresAt,
@@ -245,14 +265,32 @@ func (p *PostgresStore) GetDetails(ctx context.Context, bookingReference string)
 			&details.Screening.AuditoriumName,
 			&details.Screening.StartTime,
 			&details.Screening.EndTime,
+			&seatID,
 			&seat.Label,
 			&seat.UnitPriceAmountMinor,
+			&credentialDigest,
+			&credentialCiphertext,
+			&credentialKeyVersion,
 		); err != nil {
 			return booking.BookingDetails{}, fmt.Errorf("scan booking details: %w", err)
+		}
+
+		if credentialKeyVersion.Valid {
+			credential, err := p.ticketCredentials.Reveal(bookingID, seatID, ticket.EncryptedCredential{
+				Digest:     credentialDigest,
+				Ciphertext: credentialCiphertext,
+				KeyVersion: int16(credentialKeyVersion.Int64),
+			})
+			if err != nil {
+				return booking.BookingDetails{}, fmt.Errorf("reveal ticket credential for booking %d seat %q: %w", bookingID, seat.Label, err)
+			}
+
+			seat.Ticket = &booking.BookingTicketDetails{QRCodeValue: credential}
 		}
 		details.Seats = append(details.Seats, seat)
 		found = true
 	}
+
 	if err := rows.Err(); err != nil {
 		return booking.BookingDetails{}, fmt.Errorf("iterate booking details: %w", err)
 	}
