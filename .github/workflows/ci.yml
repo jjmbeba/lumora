@@ -24,7 +24,7 @@ jobs:
         env:
           POSTGRES_DB: cinema_ticketing_test
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
@@ -34,16 +34,16 @@ jobs:
           --health-retries 15
 
     env:
-      DATABASE_URL: postgres://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/cinema_ticketing_test?sslmode=disable
-      BOOKING_TEST_DATABASE_URL: postgres://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/cinema_ticketing_test?sslmode=disable
-      PAYMENT_TEST_DATABASE_URL: postgres://postgres:ci-${{ github.run_id }}-${{ github.run_attempt }}@localhost:5432/cinema_ticketing_test?sslmode=disable
+      DATABASE_URL: postgres://postgres@localhost:5432/cinema_ticketing_test?sslmode=disable
+      BOOKING_TEST_DATABASE_URL: postgres://postgres@localhost:5432/cinema_ticketing_test?sslmode=disable
+      PAYMENT_TEST_DATABASE_URL: postgres://postgres@localhost:5432/cinema_ticketing_test?sslmode=disable
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
