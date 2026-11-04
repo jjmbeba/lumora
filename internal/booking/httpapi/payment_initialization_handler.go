@@ -57,7 +57,7 @@ func (h *PaymentInitializationStatusHandler) ServeHTTP(w http.ResponseWriter, r 
 	}
 
 	initialization, err := h.checkout.GetLatestInitialization(r.Context(), bookingReference)
-	
+
 	switch {
 	case errors.Is(err, payment.ErrInvalidInitializationRequest):
 		http.Error(w, "invalid booking reference", http.StatusBadRequest)
@@ -75,7 +75,7 @@ func (h *PaymentInitializationStatusHandler) ServeHTTP(w http.ResponseWriter, r 
 		http.Error(w, "something went wrong", http.StatusInternalServerError)
 		return
 	}
-	
+
 	method, ok := paymentMethodName(initialization.PaymentMethod)
 	if !ok {
 		http.Error(w, "something went wrong", http.StatusInternalServerError)

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"example.com/cinema-tickets-backend/internal/payment/postgres/dbgen"
 )
 
 // insertTickets creates one ticket for each seat saved for the booking. The
@@ -21,60 +23,20 @@ func (p *PostgresStore) insertTickets(ctx context.Context, tx *sql.Tx, bookingID
 		return ErrTicketCredentialCipherRequired
 	}
 
-	const retrieveSeatIDs = `
-		SELECT seat_id
-		FROM bookings_seats
-		WHERE booking_id = $1
-		ORDER BY seat_id
-	`
-
-	rows, err := tx.QueryContext(ctx, retrieveSeatIDs, bookingID)
+	seatRows, err := dbgen.New(tx).GetBookingSeatIDs(ctx, int32(bookingID))
 	if err != nil {
 		return fmt.Errorf("query seats for booking %d: %w", bookingID, err)
 	}
-
-	seatIDs := make([]int, 0)
-	for rows.Next() {
-		var seatID int
-
-		if err := rows.Scan(&seatID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan seat for booking %d: %w", bookingID, err)
-		}
-
-		seatIDs = append(seatIDs, seatID)
-	}
-
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate seats for booking %d: %w", bookingID, err)
-	}
-
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close seat rows for booking %d: %w", bookingID, err)
+	seatIDs := make([]int, len(seatRows))
+	for i, seatID := range seatRows {
+		seatIDs[i] = int(seatID)
 	}
 
 	if len(seatIDs) == 0 {
 		return fmt.Errorf("booking %d has no saved seats", bookingID)
 	}
 
-	const insertTicket = `
-		INSERT INTO tickets (
-			booking_id,
-			seat_id,
-			credential_digest,
-			credential_ciphertext,
-			credential_key_version
-		)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (booking_id, seat_id) DO NOTHING
-	`
-
-	stmt, err := tx.PrepareContext(ctx, insertTicket)
-	if err != nil {
-		return fmt.Errorf("prepare ticket insert: %w", err)
-	}
-	defer stmt.Close()
+	queries := dbgen.New(tx)
 
 	for _, seatID := range seatIDs {
 		credential, err := p.ticketCredentials.Issue(bookingID, seatID)
@@ -82,7 +44,10 @@ func (p *PostgresStore) insertTickets(ctx context.Context, tx *sql.Tx, bookingID
 			return fmt.Errorf("issue credential for booking %d seat %d: %w", bookingID, seatID, err)
 		}
 
-		if _, err := stmt.ExecContext(ctx, bookingID, seatID, credential.Digest, credential.Ciphertext, credential.KeyVersion); err != nil {
+		if err := queries.InsertTicket(ctx, dbgen.InsertTicketParams{
+			BookingID: int32(bookingID), SeatID: int32(seatID), CredentialDigest: credential.Digest,
+			CredentialCiphertext: credential.Ciphertext, CredentialKeyVersion: credential.KeyVersion,
+		}); err != nil {
 			return fmt.Errorf("insert ticket for booking %d seat %d: %w", bookingID, seatID, err)
 		}
 	}
@@ -103,19 +68,8 @@ func (p *PostgresStore) insertEmailTask(ctx context.Context, tx *sql.Tx, booking
 		return errors.New("recipient email is required")
 	}
 
-	const insertEmailTask = `
-		INSERT INTO email_outbox (
-			event_key,
-			kind,
-			recipient_email,
-			booking_id
-		)
-		VALUES ($1, 'BOOKING_TICKETS', $2, $3)
-		ON CONFLICT (booking_id) WHERE kind = 'BOOKING_TICKETS' DO NOTHING
-	`
-
 	eventKey := fmt.Sprintf("booking-ticket-email:%d", bookingID)
-	if _, err := tx.ExecContext(ctx, insertEmailTask, eventKey, recipientEmail, bookingID); err != nil {
+	if err := dbgen.New(tx).EnqueueTicketEmail(ctx, dbgen.EnqueueTicketEmailParams{EventKey: eventKey, RecipientEmail: recipientEmail, BookingID: sql.NullInt32{Int32: int32(bookingID), Valid: true}}); err != nil {
 		return fmt.Errorf("enqueue ticket email for booking %d: %w", bookingID, err)
 	}
 

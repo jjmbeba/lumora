@@ -11,6 +11,7 @@ import (
 
 	"example.com/cinema-tickets-backend/internal/booking"
 	"example.com/cinema-tickets-backend/internal/payment"
+	"example.com/cinema-tickets-backend/internal/payment/postgres/dbgen"
 )
 
 type InitializationStore struct {
@@ -55,24 +56,7 @@ func (p *InitializationStore) GetLatestForBooking(ctx context.Context, bookingRe
 		return payment.Initialization{}, payment.ErrInvalidInitializationRequest
 	}
 
-	var initialization payment.Initialization
-	var status, method string
-	err := p.db.QueryRowContext(ctx, `
-		SELECT pi.id, pi.status::text, pi.payment_method::text,
-		       pi.paystack_reference, COALESCE(pi.authorization_url, '')
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE b.booking_reference = $1
-		ORDER BY pi.id DESC
-		LIMIT 1
-	`, bookingReference).Scan(
-		&initialization.ID,
-		&status,
-		&method,
-		&initialization.PaystackReference,
-		&initialization.AuthorizationURL,
-	)
+	row, err := dbgen.New(p.db).GetLatestInitializationForBooking(ctx, bookingReference)
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.Initialization{}, payment.ErrInitializationNotFound
 	}
@@ -80,12 +64,13 @@ func (p *InitializationStore) GetLatestForBooking(ctx context.Context, bookingRe
 		return payment.Initialization{}, fmt.Errorf("load latest payment initialization for booking: %w", err)
 	}
 
-	initialization.Status, err = parseInitializationStatus(status)
+	initialization := payment.Initialization{ID: int(row.ID), PaystackReference: row.PaystackReference, AuthorizationURL: row.AuthorizationUrl}
+	initialization.Status, err = parseInitializationStatus(row.Status)
 	if err != nil {
 		return payment.Initialization{}, fmt.Errorf("parse payment initialization status: %w", err)
 	}
 
-	initialization.PaymentMethod, err = parsePaymentMethod(method)
+	initialization.PaymentMethod, err = parsePaymentMethod(row.PaymentMethod)
 	if err != nil {
 		return payment.Initialization{}, fmt.Errorf("parse payment initialization method: %w", err)
 	}
@@ -119,12 +104,8 @@ func (p *InitializationStore) createOrReplayInitialization(ctx context.Context, 
 	var bookingStatus string
 	var holdActive bool
 
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, status::text, hold_expires_at > clock_timestamp()
-		FROM bookings
-		WHERE booking_reference = $1
-		FOR UPDATE
-	`, request.BookingReference).Scan(&bookingID, &bookingStatus, &holdActive)
+	lockedBooking, err := dbgen.New(tx).LockBookingForInitialization(ctx, request.BookingReference)
+	bookingID, bookingStatus, holdActive = int(lockedBooking.ID), lockedBooking.Status, lockedBooking.HoldActive
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.Initialization{}, payment.ErrBookingNotFound
@@ -224,31 +205,16 @@ func (p *InitializationStore) createOrReplayInitialization(ctx context.Context, 
 		return payment.Initialization{}, err
 	}
 
-	var latestStatus string
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO payment_initializations (
-			payment_attempt_id,
-			paystack_reference,
-			payment_method,
-			status,
-			created_at,
-			updated_at
-		)
-		VALUES ($1, $2, $3, 'QUEUED', clock_timestamp(), clock_timestamp())
-		RETURNING id, status::text, payment_method::text, paystack_reference, COALESCE(authorization_url, '')
-	`, paymentAttemptID, reference, methodName).Scan(
-		&initialization.ID,
-		&latestStatus,
-		&methodName,
-		&initialization.PaystackReference,
-		&initialization.AuthorizationURL,
-	)
+	created, err := dbgen.New(tx).CreatePaymentInitialization(ctx, dbgen.CreatePaymentInitializationParams{
+		PaymentAttemptID: int32(paymentAttemptID), PaystackReference: reference, PaymentMethod: dbgen.PaymentMethod(methodName),
+	})
 
 	if err != nil {
 		return payment.Initialization{}, fmt.Errorf("insert payment initialization: %w", err)
 	}
 
-	initialization.Status, err = parseInitializationStatus(latestStatus)
+	initialization.ID = int(created.ID)
+	initialization.Status, err = parseInitializationStatus(created.Status)
 	if err != nil {
 		return payment.Initialization{}, err
 	}
@@ -257,10 +223,12 @@ func (p *InitializationStore) createOrReplayInitialization(ctx context.Context, 
 		return payment.Initialization{}, err
 	}
 
-	initialization.PaymentMethod, err = parsePaymentMethod(methodName)
+	initialization.PaymentMethod, err = parsePaymentMethod(created.PaymentMethod)
 	if err != nil {
 		return payment.Initialization{}, err
 	}
+	initialization.PaystackReference = created.PaystackReference
+	initialization.AuthorizationURL = created.AuthorizationUrl
 
 	if err := tx.Commit(); err != nil {
 		return payment.Initialization{}, fmt.Errorf("commit payment initialization: %w", err)
@@ -300,25 +268,7 @@ func loadInitializationByKey(
 	var record initializationReplay
 	var status, method, requestedMethod string
 
-	err := tx.QueryRowContext(ctx, `
-		SELECT pi.id, pi.status::text, pi.payment_method::text,
-		       pi.paystack_reference, COALESCE(pi.authorization_url, ''),
-		       receipt.request_fingerprint, b.booking_reference, receipt.requested_payment_method::text
-		FROM payment_initialization_receipts AS receipt
-		JOIN payment_initializations AS pi ON pi.id = receipt.payment_initialization_id
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE receipt.idempotency_key = $1
-	`, key).Scan(
-		&record.initialization.ID,
-		&status,
-		&method,
-		&record.initialization.PaystackReference,
-		&record.initialization.AuthorizationURL,
-		&record.fingerprint,
-		&record.bookingReference,
-		&requestedMethod,
-	)
+	row, err := dbgen.New(tx).LoadInitializationReceiptByKey(ctx, key)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return initializationReplay{}, false, nil
@@ -327,6 +277,9 @@ func loadInitializationByKey(
 	if err != nil {
 		return initializationReplay{}, false, err
 	}
+	record.initialization = payment.Initialization{ID: int(row.ID), PaystackReference: row.PaystackReference, AuthorizationURL: row.AuthorizationUrl}
+	status, method, requestedMethod = row.Status, row.PaymentMethod, row.RequestedPaymentMethod
+	record.fingerprint, record.bookingReference = row.RequestFingerprint, row.BookingReference
 
 	record.initialization.Status, err = parseInitializationStatus(status)
 	if err != nil {
@@ -350,18 +303,12 @@ func saveInitializationReceipt(ctx context.Context, tx *sql.Tx, request payment.
 	if err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `
-		INSERT INTO payment_initialization_receipts
-			(idempotency_key, request_fingerprint, requested_payment_method, payment_initialization_id)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (idempotency_key) DO NOTHING
-	`, request.IdempotencyKey, request.RequestFingerprint, method, initializationID)
+	count, err := dbgen.New(tx).SavePaymentInitializationReceipt(ctx, dbgen.SavePaymentInitializationReceiptParams{
+		IdempotencyKey: request.IdempotencyKey, RequestFingerprint: request.RequestFingerprint,
+		RequestedPaymentMethod: dbgen.PaymentMethod(method), PaymentInitializationID: int32(initializationID),
+	})
 	if err != nil {
 		return fmt.Errorf("insert initialization receipt: %w", err)
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("check initialization receipt insert: %w", err)
 	}
 	if count == 0 {
 		return errInitializationReceiptConflict
@@ -373,23 +320,7 @@ func loadUnresolvedInitialization(ctx context.Context, tx *sql.Tx, bookingRefere
 	var initialization payment.Initialization
 	var status, method string
 
-	err := tx.QueryRowContext(ctx, `
-		SELECT pi.id, pi.status::text, pi.payment_method::text,
-		       pi.paystack_reference, COALESCE(pi.authorization_url, '')
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE b.booking_reference = $1
-		  AND pi.status IN ('QUEUED', 'SUBMITTING', 'READY', 'UNKNOWN', 'REVIEW_REQUIRED')
-		ORDER BY pi.id DESC
-		LIMIT 1
-	`, bookingReference).Scan(
-		&initialization.ID,
-		&status,
-		&method,
-		&initialization.PaystackReference,
-		&initialization.AuthorizationURL,
-	)
+	row, err := dbgen.New(tx).LoadUnresolvedInitializationForBooking(ctx, bookingReference)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.Initialization{}, false, nil
@@ -398,6 +329,8 @@ func loadUnresolvedInitialization(ctx context.Context, tx *sql.Tx, bookingRefere
 	if err != nil {
 		return payment.Initialization{}, false, err
 	}
+	initialization = payment.Initialization{ID: int(row.ID), PaystackReference: row.PaystackReference, AuthorizationURL: row.AuthorizationUrl}
+	status, method = row.Status, row.PaymentMethod
 
 	initialization.Status, err = parseInitializationStatus(status)
 	if err != nil {
@@ -413,55 +346,35 @@ func loadUnresolvedInitialization(ctx context.Context, tx *sql.Tx, bookingRefere
 }
 
 func loadOrCreatePaymentAttempt(ctx context.Context, tx *sql.Tx, bookingID int) (int, string, error) {
-	var paymentAttemptID int
-	var status string
-
-	err := tx.QueryRowContext(ctx, `
-		SELECT id, status::text
-		FROM payment_attempts
-		WHERE booking_id = $1
-		FOR UPDATE
-	`, bookingID).Scan(&paymentAttemptID, &status)
+	queries := dbgen.New(tx)
+	attempt, err := queries.LoadPaymentAttemptForBooking(ctx, int32(bookingID))
 
 	if err == nil {
-		return paymentAttemptID, status, nil
+		return int(attempt.ID), attempt.Status, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, "", fmt.Errorf("load payment attempt: %w", err)
 	}
 
-	var amount int64
-	var currency sql.NullString
-	var seatCount int
-
-	err = tx.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(unit_price_amount), 0)::bigint, MIN(currency), COUNT(*)
-		FROM bookings_seats
-		WHERE booking_id = $1
-	`, bookingID).Scan(&amount, &currency, &seatCount)
+	totals, err := queries.GetBookingPriceSnapshotTotals(ctx, int32(bookingID))
 
 	if err != nil {
 		return 0, "", fmt.Errorf("calculate payment attempt amount: %w", err)
 	}
 
-	if seatCount == 0 || amount <= 0 || !currency.Valid {
+	if totals.SeatCount == 0 || totals.TotalAmount <= 0 || totals.Currency == "" {
 		return 0, "", fmt.Errorf("booking %d has no valid price snapshots", bookingID)
 	}
 
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO payment_attempts (booking_id, status, amount, currency, created_at)
-		VALUES ($1, 'PENDING', $2, $3, clock_timestamp())
-		ON CONFLICT (booking_id) DO NOTHING
-		RETURNING id, status::text
-	`, bookingID, amount, currency.String).Scan(&paymentAttemptID, &status)
+	var paymentAttemptID int
+	var status string
+	created, err := queries.CreatePaymentAttempt(ctx, dbgen.CreatePaymentAttemptParams{BookingID: int32(bookingID), Amount: int32(totals.TotalAmount), Currency: totals.Currency})
 
-	if errors.Is(err, sql.ErrNoRows) {
-		err = tx.QueryRowContext(ctx, `
-			SELECT id, status::text
-			FROM payment_attempts
-			WHERE booking_id = $1
-			FOR UPDATE
-		`, bookingID).Scan(&paymentAttemptID, &status)
+	if err == nil {
+		paymentAttemptID, status = int(created.ID), created.Status
+	} else if errors.Is(err, sql.ErrNoRows) {
+		attempt, err = queries.LoadPaymentAttemptForBooking(ctx, int32(bookingID))
+		paymentAttemptID, status = int(attempt.ID), attempt.Status
 	}
 
 	if err != nil {
@@ -472,11 +385,7 @@ func loadOrCreatePaymentAttempt(ctx context.Context, tx *sql.Tx, bookingID int) 
 }
 
 func cancelExpiredBooking(ctx context.Context, tx *sql.Tx, bookingID int) error {
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE bookings
-		SET status = 'CANCELLED'
-		WHERE id = $1 AND status = 'RESERVED'
-	`, bookingID); err != nil {
+	if err := dbgen.New(tx).CancelExpiredBooking(ctx, int32(bookingID)); err != nil {
 		return fmt.Errorf("cancel expired booking: %w", err)
 	}
 
@@ -486,13 +395,8 @@ func cancelExpiredBooking(ctx context.Context, tx *sql.Tx, bookingID int) error 
 func cancelExpiredBookingByReference(ctx context.Context, tx *sql.Tx, bookingReference string) error {
 	var bookingID int
 
-	err := tx.QueryRowContext(ctx, `
-		SELECT id FROM bookings
-		WHERE booking_reference = $1
-		  AND status = 'RESERVED'
-		  AND hold_expires_at <= clock_timestamp()
-		FOR UPDATE
-	`, bookingReference).Scan(&bookingID)
+	lockedID, err := dbgen.New(tx).LockExpiredBookingByReference(ctx, bookingReference)
+	bookingID = int(lockedID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
@@ -502,16 +406,7 @@ func cancelExpiredBookingByReference(ctx context.Context, tx *sql.Tx, bookingRef
 		return fmt.Errorf("lock expired booking after rejected initialization: %w", err)
 	}
 
-	err = tx.QueryRowContext(ctx, `
-		UPDATE bookings SET status = 'CANCELLED'
-		WHERE id = $1 AND EXISTS (
-			SELECT 1 FROM payment_attempts AS pa
-			WHERE pa.booking_id = $1 AND pa.status = 'PENDING'
-			  AND (SELECT pi.status FROM payment_initializations AS pi
-			       WHERE pi.payment_attempt_id = pa.id ORDER BY pi.id DESC LIMIT 1) = 'REJECTED'
-		)
-		RETURNING id
-	`, bookingID).Scan(&bookingID)
+	_, err = dbgen.New(tx).CancelExpiredBookingAfterRejectedInitialization(ctx, int32(bookingID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -523,15 +418,11 @@ func cancelExpiredBookingByReference(ctx context.Context, tx *sql.Tx, bookingRef
 }
 
 func releaseExpiredBooking(ctx context.Context, tx *sql.Tx, bookingID int) error {
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE payment_attempts
-		SET status = 'CANCELLED'
-		WHERE booking_id = $1 AND status = 'PENDING'
-	`, bookingID); err != nil {
+	if err := dbgen.New(tx).CancelExpiredPaymentAttempt(ctx, int32(bookingID)); err != nil {
 		return fmt.Errorf("cancel expired payment attempt after rejected initialization: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `DELETE FROM seat_claims WHERE booking_id = $1`, bookingID); err != nil {
+	if err := dbgen.New(tx).ReleaseBookingSeatClaims(ctx, int32(bookingID)); err != nil {
 		return fmt.Errorf("release expired booking claims after rejected initialization: %w", err)
 	}
 
@@ -546,19 +437,7 @@ func loadLatestInitialization(
 	var initialization payment.Initialization
 	var status, method string
 
-	err := tx.QueryRowContext(ctx, `
-		SELECT id, status::text, payment_method::text, paystack_reference, COALESCE(authorization_url, '')
-		FROM payment_initializations
-		WHERE payment_attempt_id = $1
-		ORDER BY id DESC
-		LIMIT 1
-	`, paymentAttemptID).Scan(
-		&initialization.ID,
-		&status,
-		&method,
-		&initialization.PaystackReference,
-		&initialization.AuthorizationURL,
-	)
+	row, err := dbgen.New(tx).LoadLatestInitializationForAttempt(ctx, int32(paymentAttemptID))
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.Initialization{}, false, nil
@@ -566,6 +445,8 @@ func loadLatestInitialization(
 	if err != nil {
 		return payment.Initialization{}, false, err
 	}
+	initialization = payment.Initialization{ID: int(row.ID), PaystackReference: row.PaystackReference, AuthorizationURL: row.AuthorizationUrl}
+	status, method = row.Status, row.PaymentMethod
 
 	initialization.Status, err = parseInitializationStatus(status)
 	if err != nil {

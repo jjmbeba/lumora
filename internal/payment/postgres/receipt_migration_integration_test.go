@@ -9,7 +9,7 @@ import (
 
 func TestInitializationReceiptMigration(t *testing.T) {
 	db := integrationDatabase(t)
-	migration, err := os.ReadFile("../../../migrations/05-payment-initialization-receipts.sql")
+	migration, err := os.ReadFile("../../../migrations/00005_payment_initialization_receipts.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +35,7 @@ func TestInitializationReceiptMigration(t *testing.T) {
 			}
 			defer conn.ExecContext(ctx, `SET search_path TO public`)
 			if fresh {
-				baseline, err := os.ReadFile("../../../migrations/migration.sql")
+				baseline, err := os.ReadFile("../../../migrations/00001_core_schema.sql")
 				if err != nil {
 					t.Fatal(err)
 				}

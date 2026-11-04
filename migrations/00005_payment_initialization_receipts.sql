@@ -1,6 +1,7 @@
+-- +goose Up
+
 -- Move existing initialization request identities into a receipt per request.
 -- Fresh schemas already have receipts; rerunning this migration is safe.
-BEGIN;
 
 LOCK TABLE payment_initializations IN ACCESS EXCLUSIVE MODE;
 
@@ -12,6 +13,7 @@ CREATE TABLE IF NOT EXISTS payment_initialization_receipts (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
+-- +goose StatementBegin
 DO $$
 DECLARE
     has_key boolean;
@@ -41,5 +43,5 @@ BEGIN
         ALTER TABLE payment_initializations DROP COLUMN request_fingerprint;
     END IF;
 END $$;
+-- +goose StatementEnd
 
-COMMIT;

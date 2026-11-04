@@ -1,3 +1,5 @@
+-- +goose Up
+
 CREATE TABLE booking_verification_challenges (
   booking_id integer PRIMARY KEY REFERENCES bookings(id) ON DELETE CASCADE,
   code_digest bytea NOT NULL CHECK (octet_length(code_digest) = 32),

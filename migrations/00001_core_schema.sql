@@ -1,3 +1,5 @@
+-- +goose Up
+
 CREATE TYPE "BookingStatus" AS ENUM (
   'RESERVED',
   'PAYMENT_REVIEW',
