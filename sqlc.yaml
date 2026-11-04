@@ -1,0 +1,26 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/booking/postgres/queries"
+    gen:
+      go:
+        package: "dbgen"
+        out: "internal/booking/postgres/dbgen"
+        sql_package: "database/sql"
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/payment/postgres/queries"
+    gen:
+      go:
+        package: "dbgen"
+        out: "internal/payment/postgres/dbgen"
+        sql_package: "database/sql"
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/ticket/postgres/queries"
+    gen:
+      go:
+        package: "dbgen"
+        out: "internal/ticket/postgres/dbgen"
+        sql_package: "database/sql"

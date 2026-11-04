@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/ticket"
+	"example.com/cinema-tickets-backend/internal/ticket/postgres/dbgen"
 )
 
 type EmailOutboxStore struct {
@@ -91,43 +92,19 @@ func (s *EmailOutboxStore) LoadTicketEmail(ctx context.Context, job ticket.Ticke
 		return ticket.TicketEmail{}, errors.New("ticket email claim is invalid")
 	}
 
-	const loadEmail = `
-		SELECT b.booking_reference, s.label, t.seat_id,
-			t.credential_digest, t.credential_ciphertext, t.credential_key_version
-		FROM bookings AS b
-		JOIN tickets AS t ON t.booking_id = b.id
-		JOIN seats AS s ON s.id = t.seat_id
-		WHERE b.id = $1
-		ORDER BY t.seat_id
-	`
-
-	rows, err := s.db.QueryContext(ctx, loadEmail, job.BookingID)
+	rows, err := dbgen.New(s.db).LoadTicketEmailItems(ctx, int32(job.BookingID))
 	if err != nil {
 		return ticket.TicketEmail{}, fmt.Errorf("load tickets for booking %d: %w", job.BookingID, err)
 	}
-	defer rows.Close()
-
 	email := ticket.TicketEmail{
 		To:             job.Recipient,
 		IdempotencyKey: job.EventKey,
 		Tickets:        make([]ticket.TicketEmailItem, 0),
 	}
 
-	for rows.Next() {
-		var bookingReference, seatLabel string
-		var seatID int
-		var credential ticket.EncryptedCredential
-
-		if err := rows.Scan(
-			&bookingReference,
-			&seatLabel,
-			&seatID,
-			&credential.Digest,
-			&credential.Ciphertext,
-			&credential.KeyVersion,
-		); err != nil {
-			return ticket.TicketEmail{}, fmt.Errorf("read ticket for booking %d: %w", job.BookingID, err)
-		}
+	for _, row := range rows {
+		credential := ticket.EncryptedCredential{Digest: row.CredentialDigest, Ciphertext: row.CredentialCiphertext, KeyVersion: row.CredentialKeyVersion}
+		bookingReference, seatLabel, seatID := row.BookingReference, row.SeatLabel, int(row.SeatID)
 
 		if email.BookingReference != "" && email.BookingReference != bookingReference {
 			return ticket.TicketEmail{}, fmt.Errorf("booking reference changed while loading booking %d", job.BookingID)
@@ -145,9 +122,6 @@ func (s *EmailOutboxStore) LoadTicketEmail(ctx context.Context, job ticket.Ticke
 		})
 	}
 
-	if err := rows.Err(); err != nil {
-		return ticket.TicketEmail{}, fmt.Errorf("iterate tickets for booking %d: %w", job.BookingID, err)
-	}
 	if len(email.Tickets) == 0 {
 		return ticket.TicketEmail{}, fmt.Errorf("booking %d has no ticket rows", job.BookingID)
 	}

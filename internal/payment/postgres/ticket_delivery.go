@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"example.com/cinema-tickets-backend/internal/payment/postgres/dbgen"
 )
 
 // insertTickets creates one ticket for each seat saved for the booking. The
@@ -21,37 +23,13 @@ func (p *PostgresStore) insertTickets(ctx context.Context, tx *sql.Tx, bookingID
 		return ErrTicketCredentialCipherRequired
 	}
 
-	const retrieveSeatIDs = `
-		SELECT seat_id
-		FROM bookings_seats
-		WHERE booking_id = $1
-		ORDER BY seat_id
-	`
-
-	rows, err := tx.QueryContext(ctx, retrieveSeatIDs, bookingID)
+	seatRows, err := dbgen.New(tx).GetBookingSeatIDs(ctx, int32(bookingID))
 	if err != nil {
 		return fmt.Errorf("query seats for booking %d: %w", bookingID, err)
 	}
-
-	seatIDs := make([]int, 0)
-	for rows.Next() {
-		var seatID int
-
-		if err := rows.Scan(&seatID); err != nil {
-			rows.Close()
-			return fmt.Errorf("scan seat for booking %d: %w", bookingID, err)
-		}
-
-		seatIDs = append(seatIDs, seatID)
-	}
-
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("iterate seats for booking %d: %w", bookingID, err)
-	}
-
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close seat rows for booking %d: %w", bookingID, err)
+	seatIDs := make([]int, len(seatRows))
+	for i, seatID := range seatRows {
+		seatIDs[i] = int(seatID)
 	}
 
 	if len(seatIDs) == 0 {

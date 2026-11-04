@@ -9,6 +9,7 @@ import (
 
 	"example.com/cinema-tickets-backend/internal/booking"
 	"example.com/cinema-tickets-backend/internal/payment"
+	"example.com/cinema-tickets-backend/internal/payment/postgres/dbgen"
 	"example.com/cinema-tickets-backend/internal/ticket"
 )
 
@@ -50,31 +51,6 @@ const updateInitializationSQL = `
 	`
 
 func (p *PostgresStore) ClaimNext(ctx context.Context) (payment.Claim, bool, error) {
-	const selectNextJob = `
-		SELECT
-			pi.id,
-			pi.status::text,
-			pi.payment_method::text,
-			pi.paystack_reference,
-			pa.currency,
-			pa.amount,
-			b.customer_email,
-			b.customer_phone
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE (
-			pi.status IN ('QUEUED', 'UNKNOWN', 'READY')
-			AND (pi.next_attempt_at IS NULL OR pi.next_attempt_at <= clock_timestamp())
-		) OR (
-			pi.status = 'SUBMITTING'
-			AND pi.lease_expires_at <= clock_timestamp()
-		)
-		ORDER BY COALESCE(pi.next_attempt_at, pi.lease_expires_at, pi.created_at), pi.id
-		LIMIT 1
-		FOR UPDATE OF pi SKIP LOCKED
-	`
-
 	const claimJob = `
 		UPDATE payment_initializations
 		SET status = 'SUBMITTING',
@@ -92,20 +68,7 @@ func (p *PostgresStore) ClaimNext(ctx context.Context) (payment.Claim, bool, err
 	}
 	defer tx.Rollback()
 
-	var claim payment.Claim
-	var previousStatus string
-	var paymentMethod string
-
-	err = tx.QueryRowContext(ctx, selectNextJob).Scan(
-		&claim.InitializationID,
-		&previousStatus,
-		&paymentMethod,
-		&claim.PaystackReference,
-		&claim.Currency,
-		&claim.AmountMinor,
-		&claim.PayerEmail,
-		&claim.PayerPhoneNumber,
-	)
+	row, err := dbgen.New(tx).ClaimNextPaymentInitialization(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return payment.Claim{}, false, fmt.Errorf("commit empty claim transaction: %w", err)
@@ -117,12 +80,14 @@ func (p *PostgresStore) ClaimNext(ctx context.Context) (payment.Claim, bool, err
 		return payment.Claim{}, false, fmt.Errorf("select next payment initialization: %w", err)
 	}
 
-	claim.PreviousStatus, err = parseInitializationStatus(previousStatus)
+	claim := payment.Claim{InitializationID: int(row.InitializationID), PaystackReference: row.PaystackReference, Currency: row.Currency, AmountMinor: int64(row.Amount), PayerEmail: row.CustomerEmail, PayerPhoneNumber: row.CustomerPhone}
+
+	claim.PreviousStatus, err = parseInitializationStatus(row.PreviousStatus)
 	if err != nil {
 		return payment.Claim{}, false, err
 	}
 
-	claim.PaymentMethod, err = parsePaymentMethod(paymentMethod)
+	claim.PaymentMethod, err = parsePaymentMethod(row.PaymentMethod)
 	if err != nil {
 		return payment.Claim{}, false, err
 	}
@@ -182,23 +147,6 @@ func (p *PostgresStore) MarkVerificationPending(ctx context.Context, claim payme
 // once its booking hold has expired. The hold decision and claim fence must be
 // checked in the same transaction as the transition.
 func (p *PostgresStore) finishPendingVerification(ctx context.Context, claim payment.Claim, nextStatus string, nextCheckAt time.Time) error {
-	const lockClaimSQL = `
-		SELECT pa.id, pa.status::text, b.id, b.status::text,
-			b.hold_expires_at,
-			b.hold_expires_at <= clock_timestamp(),
-			EXISTS (
-				SELECT 1 FROM webhook_inbox AS wi
-				WHERE wi.reference = pi.paystack_reference
-					AND wi.event_type = 'charge.success'
-			)
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE pi.id = $1
-			AND pi.status = 'SUBMITTING'
-			AND pi.worker_attempt_count = $2
-		FOR UPDATE OF pi, pa, b
-	`
 	const scheduleSQL = `
 		UPDATE payment_initializations
 		SET status = $1,
@@ -219,14 +167,7 @@ func (p *PostgresStore) finishPendingVerification(ctx context.Context, claim pay
 	}
 	defer tx.Rollback()
 
-	var paymentAttemptID, bookingID int
-	var paymentStatus, bookingStatus string
-	var holdExpiresAt time.Time
-	var holdExpired, successWebhookRecorded bool
-	err = tx.QueryRowContext(ctx, lockClaimSQL, claim.InitializationID, claim.Generation).Scan(
-		&paymentAttemptID, &paymentStatus, &bookingID, &bookingStatus,
-		&holdExpiresAt, &holdExpired, &successWebhookRecorded,
-	)
+	row, err := dbgen.New(tx).LockClaimForPendingVerification(ctx, dbgen.LockClaimForPendingVerificationParams{ID: int32(claim.InitializationID), WorkerAttemptCount: int32(claim.Generation)})
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.ErrClaimLost
 	}
@@ -234,11 +175,13 @@ func (p *PostgresStore) finishPendingVerification(ctx context.Context, claim pay
 		return fmt.Errorf("lock payment state before scheduling verification: %w", err)
 	}
 
-	parsedPaymentStatus, err := parsePaymentStatus(paymentStatus)
+	bookingID := int(row.BookingID)
+	holdExpiresAt, holdExpired, successWebhookRecorded := row.HoldExpiresAt, row.HoldExpired, row.SuccessWebhookRecorded
+	parsedPaymentStatus, err := parsePaymentStatus(row.PaymentStatus)
 	if err != nil {
 		return err
 	}
-	parsedBookingStatus, err := parseBookingStatus(bookingStatus)
+	parsedBookingStatus, err := parseBookingStatus(row.BookingStatus)
 	if err != nil {
 		return err
 	}
@@ -302,16 +245,6 @@ func (p *PostgresStore) MarkCancelled(ctx context.Context, claim payment.Claim) 
 }
 
 func (p *PostgresStore) MarkPaymentCancelled(ctx context.Context, claim payment.Claim) error {
-	const lockClaimSQL = `
-		SELECT pa.id, pa.status::text, b.id, b.status::text
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE pi.id = $1
-			AND pi.status = 'SUBMITTING'
-			AND pi.worker_attempt_count = $2
-		FOR UPDATE OF pi, pa, b
-	`
 	const markPaymentCancelledSQL = `
 		UPDATE payment_attempts
 		SET status = 'CANCELLED'
@@ -338,17 +271,7 @@ func (p *PostgresStore) MarkPaymentCancelled(ctx context.Context, claim payment.
 	}
 	defer tx.Rollback()
 
-	var paymentAttemptID int
-	var paymentStatus string
-	var bookingID int
-	var bookingStatus string
-
-	err = tx.QueryRowContext(ctx, lockClaimSQL, claim.InitializationID, claim.Generation).Scan(
-		&paymentAttemptID,
-		&paymentStatus,
-		&bookingID,
-		&bookingStatus,
-	)
+	locked, err := dbgen.New(tx).LockClaimPaymentAndBooking(ctx, dbgen.LockClaimPaymentAndBookingParams{ID: int32(claim.InitializationID), WorkerAttemptCount: int32(claim.Generation)})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.ErrClaimLost
@@ -357,11 +280,12 @@ func (p *PostgresStore) MarkPaymentCancelled(ctx context.Context, claim payment.
 		return fmt.Errorf("lock claimed initialization, payment attempt, and booking: %w", err)
 	}
 
-	parsedPaymentStatus, err := parsePaymentStatus(paymentStatus)
+	paymentAttemptID, bookingID := int(locked.PaymentAttemptID), int(locked.BookingID)
+	parsedPaymentStatus, err := parsePaymentStatus(locked.PaymentStatus)
 	if err != nil {
 		return err
 	}
-	parsedBookingStatus, err := parseBookingStatus(bookingStatus)
+	parsedBookingStatus, err := parseBookingStatus(locked.BookingStatus)
 	if err != nil {
 		return err
 	}
@@ -405,16 +329,6 @@ func (p *PostgresStore) MarkPaymentCancelled(ctx context.Context, claim payment.
 }
 
 func (p *PostgresStore) MarkReversed(ctx context.Context, claim payment.Claim) error {
-	const lockClaimSQL = `
-		SELECT pa.id, pa.status::text, b.id, b.status::text
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE pi.id = $1
-			AND pi.status = 'SUBMITTING'
-			AND pi.worker_attempt_count = $2
-		FOR UPDATE OF pi, pa, b
-	`
 	const markBookingForReviewSQL = `
 		UPDATE bookings
 		SET status = 'PAYMENT_REVIEW'
@@ -428,26 +342,18 @@ func (p *PostgresStore) MarkReversed(ctx context.Context, claim payment.Claim) e
 	}
 	defer tx.Rollback()
 
-	var paymentAttemptID int
-	var paymentStatus string
-	var bookingID int
-	var bookingStatus string
-	err = tx.QueryRowContext(ctx, lockClaimSQL, claim.InitializationID, claim.Generation).Scan(
-		&paymentAttemptID,
-		&paymentStatus,
-		&bookingID,
-		&bookingStatus,
-	)
+	locked, err := dbgen.New(tx).LockClaimPaymentAndBooking(ctx, dbgen.LockClaimPaymentAndBookingParams{ID: int32(claim.InitializationID), WorkerAttemptCount: int32(claim.Generation)})
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.ErrClaimLost
 	}
 	if err != nil {
 		return fmt.Errorf("lock claimed initialization, payment attempt, and booking: %w", err)
 	}
-	if _, err := parsePaymentStatus(paymentStatus); err != nil {
+	bookingID := int(locked.BookingID)
+	if _, err := parsePaymentStatus(locked.PaymentStatus); err != nil {
 		return err
 	}
-	parsedBookingStatus, err := parseBookingStatus(bookingStatus)
+	parsedBookingStatus, err := parseBookingStatus(locked.BookingStatus)
 	if err != nil {
 		return err
 	}
@@ -468,16 +374,6 @@ func (p *PostgresStore) MarkReversed(ctx context.Context, claim payment.Claim) e
 }
 
 func (p *PostgresStore) MarkFailed(ctx context.Context, claim payment.Claim) error {
-	const lockClaimSQL = `
-		SELECT pa.id, pa.status::text, b.id, b.status::text
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE pi.id = $1
-			AND pi.status = 'SUBMITTING'
-			AND pi.worker_attempt_count = $2
-		FOR UPDATE OF pi, pa, b
-	`
 	const markPaymentFailedSQL = `
 		UPDATE payment_attempts
 		SET status = 'FAILED'
@@ -504,16 +400,7 @@ func (p *PostgresStore) MarkFailed(ctx context.Context, claim payment.Claim) err
 	}
 	defer tx.Rollback()
 
-	var paymentAttemptID int
-	var paymentStatus string
-	var bookingID int
-	var bookingStatus string
-	err = tx.QueryRowContext(ctx, lockClaimSQL, claim.InitializationID, claim.Generation).Scan(
-		&paymentAttemptID,
-		&paymentStatus,
-		&bookingID,
-		&bookingStatus,
-	)
+	locked, err := dbgen.New(tx).LockClaimPaymentAndBooking(ctx, dbgen.LockClaimPaymentAndBookingParams{ID: int32(claim.InitializationID), WorkerAttemptCount: int32(claim.Generation)})
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.ErrClaimLost
 	}
@@ -521,11 +408,12 @@ func (p *PostgresStore) MarkFailed(ctx context.Context, claim payment.Claim) err
 		return fmt.Errorf("lock claimed initialization, payment attempt, and booking: %w", err)
 	}
 
-	parsedPaymentStatus, err := parsePaymentStatus(paymentStatus)
+	paymentAttemptID, bookingID := int(locked.PaymentAttemptID), int(locked.BookingID)
+	parsedPaymentStatus, err := parsePaymentStatus(locked.PaymentStatus)
 	if err != nil {
 		return err
 	}
-	parsedBookingStatus, err := parseBookingStatus(bookingStatus)
+	parsedBookingStatus, err := parseBookingStatus(locked.BookingStatus)
 	if err != nil {
 		return err
 	}
@@ -602,17 +490,6 @@ func (p *PostgresStore) MarkPaid(ctx context.Context, claim payment.Claim, verif
 		return err
 	}
 
-	const lockClaimSQL = `
-		SELECT pa.id, b.id, pa.status::text, b.status::text, b.customer_email
-		FROM payment_initializations AS pi
-		JOIN payment_attempts AS pa ON pa.id = pi.payment_attempt_id
-		JOIN bookings AS b ON b.id = pa.booking_id
-		WHERE pi.id = $1
-			AND pi.status = 'SUBMITTING'
-			AND pi.worker_attempt_count = $2
-		FOR UPDATE OF pi, pa, b
-	`
-
 	const markPaymentPaid = `
 	UPDATE payment_attempts
 	SET status = 'PAID'
@@ -636,13 +513,7 @@ func (p *PostgresStore) MarkPaid(ctx context.Context, claim payment.Claim, verif
 
 	defer tx.Rollback()
 
-	var paymentAttemptID int
-	var paymentAttemptStatus string
-	var bookingID int
-	var bookingStatus string
-	var customerEmail string
-
-	err = tx.QueryRowContext(ctx, lockClaimSQL, claim.InitializationID, claim.Generation).Scan(&paymentAttemptID, &bookingID, &paymentAttemptStatus, &bookingStatus, &customerEmail)
+	locked, err := dbgen.New(tx).LockClaimForPaidTransition(ctx, dbgen.LockClaimForPaidTransitionParams{ID: int32(claim.InitializationID), WorkerAttemptCount: int32(claim.Generation)})
 	if errors.Is(err, sql.ErrNoRows) {
 		return payment.ErrClaimLost
 	}
@@ -651,14 +522,16 @@ func (p *PostgresStore) MarkPaid(ctx context.Context, claim payment.Claim, verif
 		return fmt.Errorf("lock claim failed: %w", err)
 	}
 
-	parsedPaymentStatus, err := parsePaymentStatus(paymentAttemptStatus)
+	paymentAttemptID, bookingID := int(locked.PaymentAttemptID), int(locked.BookingID)
+	customerEmail := locked.CustomerEmail
+	parsedPaymentStatus, err := parsePaymentStatus(locked.PaymentStatus)
 	if err != nil {
 		return err
 	}
 
 	switch parsedPaymentStatus {
 	case payment.PaymentStatusPaid:
-		parsedBookingStatus, err := parseBookingStatus(bookingStatus)
+		parsedBookingStatus, err := parseBookingStatus(locked.BookingStatus)
 		if err != nil {
 			return err
 		}
@@ -672,7 +545,7 @@ func (p *PostgresStore) MarkPaid(ctx context.Context, claim payment.Claim, verif
 		}
 
 	case payment.PaymentStatusPending:
-		parsedBookingStatus, err := parseBookingStatus(bookingStatus)
+		parsedBookingStatus, err := parseBookingStatus(locked.BookingStatus)
 		if err != nil {
 			return err
 		}
