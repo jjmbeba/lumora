@@ -1,3 +1,5 @@
+-- +goose Up
+
 CREATE TYPE "StaffRole" AS ENUM (
   'MANAGER',
   'SCANNER'

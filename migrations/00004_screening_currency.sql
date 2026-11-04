@@ -1,8 +1,11 @@
+-- +goose Up
+
 -- Move currency from individual screening-seat prices to the screening.
 -- Existing data is migrated only when every screening has priced seats and
 -- all of its seat-price rows (and historical booking snapshots) agree.
--- Fresh databases already have the target shape from migration.sql, so this
+-- Fresh databases already have the target shape from 00001_core_schema.sql, so this
 -- script is a no-op there apart from ensuring the named index/foreign key.
+-- +goose StatementBegin
 DO $$
 DECLARE
     screenings_has_currency boolean;
@@ -114,3 +117,4 @@ BEGIN
             DEFERRABLE INITIALLY IMMEDIATE;
     END IF;
 END $$;
+-- +goose StatementEnd

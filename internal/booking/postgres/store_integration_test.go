@@ -373,7 +373,7 @@ func newBookingIntegrationFixture(t *testing.T) (*sql.DB, *PostgresStore, bookin
 
 	dsn := os.Getenv("BOOKING_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set BOOKING_TEST_DATABASE_URL to a dedicated PostgreSQL database with migrations/migration.sql applied")
+		t.Skip("set BOOKING_TEST_DATABASE_URL to a dedicated PostgreSQL database with migrations applied")
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -395,7 +395,7 @@ func newBookingIntegrationFixture(t *testing.T) (*sql.DB, *PostgresStore, bookin
 		t.Fatalf("check booking schema: %v", err)
 	}
 	if !schemaReady {
-		t.Fatal("booking tables are missing; apply migrations/migration.sql to the test database first")
+		t.Fatal("booking tables are missing; run go run ./cmd/migrate up against the test database first")
 	}
 
 	credentialCipher, err := ticket.NewCredentialCipher(map[int16][]byte{1: bytes.Repeat([]byte{0x91}, 32)}, 1)

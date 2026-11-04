@@ -150,7 +150,7 @@ func TestWebhookStorePersistsProviderStatusAndTimestamps(t *testing.T) {
 		t.Fatalf("check webhook inbox schema: %v", err)
 	}
 	if !webhookSchemaReady {
-		t.Fatal("webhook_inbox is missing; apply migrations/webhooks.sql to the test database first")
+		t.Fatal("webhook_inbox is missing; run go run ./cmd/migrate up against the test database first")
 	}
 
 	rows := seedPaymentRows(t, db, "PENDING", "RESERVED")
@@ -673,7 +673,7 @@ func integrationDatabase(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv("PAYMENT_TEST_DATABASE_URL")
 	if dsn == "" {
-		t.Skip("set PAYMENT_TEST_DATABASE_URL to a dedicated PostgreSQL database with migrations/migration.sql applied")
+		t.Skip("set PAYMENT_TEST_DATABASE_URL to a dedicated PostgreSQL database with migrations applied")
 	}
 
 	db, err := sql.Open("pgx", dsn)
@@ -697,7 +697,7 @@ func integrationDatabase(t *testing.T) *sql.DB {
 		t.Fatalf("check PostgreSQL test schema: %v", err)
 	}
 	if !schemaReady {
-		t.Fatalf("payment_initializations is missing; apply migrations/migration.sql to the test database first")
+		t.Fatalf("payment_initializations is missing; run go run ./cmd/migrate up against the test database first")
 	}
 	return db
 }

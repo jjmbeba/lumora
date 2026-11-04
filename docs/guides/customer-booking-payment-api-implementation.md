@@ -11,7 +11,7 @@ Before coding, read these together:
 - `CONTEXT.md` for current product rules.
 - `docs/architecture/decisions.md` for idempotency, package boundaries, and transaction rules.
 - `docs/architecture/flows/booking-create-idempotency-flow.excalidraw` for booking replay and seat-conflict behavior.
-- `migrations/migration.sql` for the constraints the code must satisfy.
+- `migrations/00001_core_schema.sql` and `go run ./cmd/migrate up` for the database constraints and setup.
 - `internal/payment/worker.go` and `internal/payment/postgres/store.go` for the existing payment worker contract and state transitions.
 
 The important boundary is: PostgreSQL owns durable state and atomic seat ownership; Go validates and coordinates operations; Paystack network calls happen after database transactions have committed.
@@ -72,7 +72,7 @@ Do not keep a transaction open after this operation. Do not call Paystack from t
 
 **Goal:** translate HTTP input/output while keeping booking rules in the service.
 
-**Implemented:** booking creation is exposed by `POST /bookings`. Email-verification contracts and service live in `internal/booking/email_verification.go`, `internal/booking/email_verification_store.go`, and `internal/booking/email_verification_service.go`; PostgreSQL persistence lives in `internal/booking/postgres/email_verification_store.go`, with schema in `migrations/06-booking-email-verification.sql`. The Resend adapter is in `internal/email/resend/sender.go`. The booking API wires the store, sender, service, limiter, and routes in `cmd/booking-api/main.go`. The challenge and verification routes are `POST /bookings/{reference}/email-verification-challenges` and `POST /bookings/{reference}/email-verifications`. The challenge route returns the same generic `202 Accepted` response for unknown bookings, booking-level limits, and email-delivery failures. Configuration is read from `RESEND_API_KEY`, `EMAIL_FROM`, and `BOOKING_ACCESS_CODE_HMAC_KEY`; never commit their values. The email-sender interface stays narrow and booking-owned, without Resend SDK types.
+**Implemented:** booking creation is exposed by `POST /bookings`. Email-verification contracts and service live in `internal/booking/email_verification.go`, `internal/booking/email_verification_store.go`, and `internal/booking/email_verification_service.go`; PostgreSQL persistence lives in `internal/booking/postgres/email_verification_store.go`, with schema in Goose migration `00006_booking_email_verification.sql`. Run `go run ./cmd/migrate up` before starting services. The Resend adapter is in `internal/email/resend/sender.go`. The booking API wires the store, sender, service, limiter, and routes in `cmd/booking-api/main.go`. The challenge and verification routes are `POST /bookings/{reference}/email-verification-challenges` and `POST /bookings/{reference}/email-verifications`. The challenge route returns the same generic `202 Accepted` response for unknown booking references, booking-level limits, and email-delivery failures. Configuration is read from `RESEND_API_KEY`, `EMAIL_FROM`, and `BOOKING_ACCESS_CODE_HMAC_KEY`; never commit their values. The email-sender interface stays narrow and booking-owned, without Resend SDK types.
 
 The HTTP IP limiter is in-memory. It sweeps inactive IPs at most once every five minutes when requests arrive, resets on process restart, and does not share limits across API instances. Use shared enforcement before running multiple instances.
 
