@@ -36,6 +36,16 @@ The command requires `DATABASE_URL`, `STAFF_BOOTSTRAP_SECRET` (at least 32 bytes
 
 The command prints an `otpauth://` setup URI and its Base32 secret, then waits for a current six-digit code. It creates the manager only after the code verifies. On success it prints ten recovery codes once; save them securely. The database stores their SHA-256 digests, not the codes.
 
+## Verify the sign-in and session flow
+
+The HTTP integration test uses a dedicated disposable PostgreSQL database. Apply the migrations to that database, then run:
+
+```sh
+STAFF_HTTP_TEST_DATABASE_URL="$DATABASE_URL" go test ./internal/staff/httpapi -run '^TestAuthHTTPFlowPostgres$' -v
+```
+
+The test creates and removes its own fixture account. It covers password login, MFA challenge completion, secure session-cookie authentication, logout, and rejection of the revoked session.
+
 ## Current implementation boundary
 
 The initial-owner bootstrap and password/MFA sign-in/session path are implemented. Manager invitations/deactivation, role-protected staff operations, and a distributed login rate limit remain separate implementation work.
