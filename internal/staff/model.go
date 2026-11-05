@@ -33,6 +33,20 @@ type Account struct {
 	Role        Role
 	Status      AccountStatus
 	MFAEnabled  bool
+	CreatedAt   time.Time
+}
+
+type ListAccountsRequest struct {
+	Search   string
+	Page     int
+	PageSize int
+}
+
+type AccountPage struct {
+	Accounts []Account
+	Page     int
+	PageSize int
+	HasMore  bool
 }
 
 // Identity is the authenticated staff principal attached to a request.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"example.com/cinema-tickets-backend/internal/staff"
 )
@@ -21,6 +22,22 @@ type createStaffInvitationRequest struct {
 type createStaffInvitationResponse struct {
 	Account identityResponse `json:"account"`
 	Status  string           `json:"status"`
+}
+
+type staffAccountListResponse struct {
+	Accounts []staffAccountResponse `json:"accounts"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"page_size"`
+	HasMore  bool                   `json:"has_more"`
+}
+
+type staffAccountResponse struct {
+	ID          int       `json:"id"`
+	Email       string    `json:"email"`
+	DisplayName string    `json:"display_name"`
+	Role        string    `json:"role"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 func NewManagementHandler(service *staff.ManagementService) (*ManagementHandler, error) {
@@ -65,6 +82,65 @@ func (h *ManagementHandler) DeactivateAccount(w http.ResponseWriter, r *http.Req
 	default:
 		http.Error(w, "unable to deactivate staff account", http.StatusInternalServerError)
 	}
+}
+
+func (h *ManagementHandler) ListAccounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	query := r.URL.Query()
+	page, err := parseOptionalQueryInt(query.Get("page"), 1)
+	if err != nil {
+		http.Error(w, "invalid page", http.StatusBadRequest)
+		return
+	}
+
+	pageSize, err := parseOptionalQueryInt(query.Get("page_size"), 0)
+	if err != nil {
+		http.Error(w, "invalid page_size", http.StatusBadRequest)
+		return
+	}
+
+	result, err := h.service.ListAccounts(r.Context(), staff.ListAccountsRequest{
+		Search: query.Get("search"), Page: page, PageSize: pageSize,
+	})
+
+	if errors.Is(err, staff.ErrInvalidAccountList) {
+		http.Error(w, "invalid staff account list options", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		http.Error(w, "unable to list staff accounts", http.StatusInternalServerError)
+		return
+	}
+
+	accounts := make([]staffAccountResponse, 0, len(result.Accounts))
+	for _, account := range result.Accounts {
+		accounts = append(accounts, staffAccountResponse{
+			ID: account.ID, Email: account.Email, DisplayName: account.DisplayName,
+			Role: string(account.Role), Status: string(account.Status), CreatedAt: account.CreatedAt,
+		})
+	}
+
+	writeAuthJSON(w, http.StatusOK, staffAccountListResponse{
+		Accounts: accounts, Page: result.Page, PageSize: result.PageSize, HasMore: result.HasMore,
+	})
+}
+
+func parseOptionalQueryInt(raw string, fallback int) (int, error) {
+	if raw == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, err
+	}
+
+	return value, nil
 }
 
 func (h *ManagementHandler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
@@ -153,5 +229,6 @@ func RegisterManagementRoutes(mux *http.ServeMux, authHandler *AuthHandler, hand
 	mux.Handle("POST /staff/accounts/{id}/deactivation", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.DeactivateAccount))))
 	mux.Handle("POST /staff/accounts/{id}/invitation", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.ResendInvitation))))
 	mux.Handle("POST /staff/accounts", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.CreateInvitation))))
+	mux.Handle("GET /staff/accounts", authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.ListAccounts)))
 	return nil
 }

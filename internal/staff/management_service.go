@@ -7,9 +7,17 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
+)
+
+const (
+	defaultStaffAccountPageSize = 20
+	maxStaffAccountPageSize     = 100
+	maxStaffAccountSearchRunes  = 100
 )
 
 type ManagementStore interface {
+	ListAccounts(ctx context.Context, search string, limit, offset int64) ([]Account, error)
 	CreateInvitation(ctx context.Context, managerID int, invitation StaffInvitation) (Account, error)
 	LoadInvitedAccount(ctx context.Context, accountID int) (Account, error)
 	ResendInvitation(ctx context.Context, managerID, accountID int, invitation StaffInvitation) (Account, error)
@@ -34,6 +42,42 @@ func (s *ManagementService) DeactivateAccount(ctx context.Context, managerID, ac
 	}
 
 	return s.store.DeactivateAccount(ctx, managerID, accountID)
+}
+
+func (s *ManagementService) ListAccounts(ctx context.Context, request ListAccountsRequest) (AccountPage, error) {
+	if request.Page == 0 {
+		request.Page = 1
+	}
+
+	if request.PageSize == 0 {
+		request.PageSize = defaultStaffAccountPageSize
+	}
+
+	request.Search = strings.TrimSpace(request.Search)
+
+	if request.Page < 1 || request.PageSize < 1 || request.PageSize > maxStaffAccountPageSize ||
+		utf8.RuneCountInString(request.Search) > maxStaffAccountSearchRunes {
+		return AccountPage{}, ErrInvalidAccountList
+	}
+
+	maxOffset := (1 << 31) - 1 - int64(request.PageSize+1)
+	if int64(request.Page-1) > maxOffset/int64(request.PageSize) {
+		return AccountPage{}, ErrInvalidAccountList
+	}
+
+	offset := int64(request.Page-1) * int64(request.PageSize)
+	accounts, err := s.store.ListAccounts(ctx, request.Search, int64(request.PageSize+1), offset)
+
+	if err != nil {
+		return AccountPage{}, err
+	}
+
+	hasMore := len(accounts) > request.PageSize
+	if hasMore {
+		accounts = accounts[:request.PageSize]
+	}
+
+	return AccountPage{Accounts: accounts, Page: request.Page, PageSize: request.PageSize, HasMore: hasMore}, nil
 }
 
 type CreateInvitationRequest struct {

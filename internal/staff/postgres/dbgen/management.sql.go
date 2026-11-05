@@ -158,6 +158,62 @@ func (q *Queries) CreateStaffInvitationEmailJob(ctx context.Context, arg CreateS
 	return err
 }
 
+const listStaffAccounts = `-- name: ListStaffAccounts :many
+SELECT id, email, display_name, role::text AS role, status::text AS status, created_at
+FROM staff_accounts
+WHERE $1::text = ''
+   OR strpos(lower(email), lower($1::text)) > 0
+   OR strpos(lower(display_name), lower($1::text)) > 0
+ORDER BY lower(display_name), id
+LIMIT $3::bigint
+OFFSET $2::bigint
+`
+
+type ListStaffAccountsParams struct {
+	Search      string
+	OffsetCount int64
+	LimitCount  int64
+}
+
+type ListStaffAccountsRow struct {
+	ID          int32
+	Email       string
+	DisplayName string
+	Role        string
+	Status      string
+	CreatedAt   time.Time
+}
+
+func (q *Queries) ListStaffAccounts(ctx context.Context, arg ListStaffAccountsParams) ([]ListStaffAccountsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listStaffAccounts, arg.Search, arg.OffsetCount, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStaffAccountsRow
+	for rows.Next() {
+		var i ListStaffAccountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.DisplayName,
+			&i.Role,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const loadInvitedStaffAccount = `-- name: LoadInvitedStaffAccount :one
 SELECT id, email, display_name, role::text AS role, status::text AS status
 FROM staff_accounts

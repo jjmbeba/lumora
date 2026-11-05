@@ -20,6 +20,49 @@ import (
 
 var staffInvitationIntegrationID atomic.Uint64
 
+func TestListAccountsSearchesAndPaginatesWithStableOrdering(t *testing.T) {
+	fixture := newStaffInvitationFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, name := range []string{"Zebra SearchTarget", "Alpha SearchTarget", "Beta SearchTarget"} {
+		account, err := fixture.management.CreateInvitation(ctx, fixture.managerID, staff.CreateInvitationRequest{
+			Email:       fixture.email(strings.ReplaceAll(strings.ToLower(name), " ", "-")),
+			DisplayName: name, Role: staff.RoleScanner,
+		})
+		if err != nil {
+			t.Fatalf("create searchable account %q: %v", name, err)
+		}
+		fixture.addAccountID(account.ID)
+	}
+
+	firstPage, err := fixture.management.ListAccounts(ctx, staff.ListAccountsRequest{
+		Search: "SEARCHTARGET", Page: 1, PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("list first matching page: %v", err)
+	}
+	if firstPage.Page != 1 || firstPage.PageSize != 2 || !firstPage.HasMore || len(firstPage.Accounts) != 2 {
+		t.Fatalf("first page metadata/accounts = %+v, want page 1 size 2, two accounts, has_more true", firstPage)
+	}
+	if firstPage.Accounts[0].DisplayName != "Alpha SearchTarget" || firstPage.Accounts[1].DisplayName != "Beta SearchTarget" {
+		t.Fatalf("first page order = %q, %q; want Alpha then Beta", firstPage.Accounts[0].DisplayName, firstPage.Accounts[1].DisplayName)
+	}
+
+	secondPage, err := fixture.management.ListAccounts(ctx, staff.ListAccountsRequest{
+		Search: "searchtarget", Page: 2, PageSize: 2,
+	})
+	if err != nil {
+		t.Fatalf("list second matching page: %v", err)
+	}
+	if secondPage.Page != 2 || secondPage.PageSize != 2 || secondPage.HasMore || len(secondPage.Accounts) != 1 {
+		t.Fatalf("second page metadata/accounts = %+v, want page 2 size 2, one account, has_more false", secondPage)
+	}
+	if secondPage.Accounts[0].DisplayName != "Zebra SearchTarget" {
+		t.Fatalf("second page account = %q, want Zebra SearchTarget", secondPage.Accounts[0].DisplayName)
+	}
+}
+
 func TestCreateAndResendInvitationInvalidatePreviousLink(t *testing.T) {
 	fixture := newStaffInvitationFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

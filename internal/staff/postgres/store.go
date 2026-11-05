@@ -79,6 +79,26 @@ func (s *Store) CreateInvitation(ctx context.Context, managerID int, invitation 
 	}, nil
 }
 
+func (s *Store) ListAccounts(ctx context.Context, search string, limit, offset int64) ([]staff.Account, error) {
+	rows, err := dbgen.New(s.db).ListStaffAccounts(ctx, dbgen.ListStaffAccountsParams{
+		Search: search, LimitCount: limit, OffsetCount: offset,
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("list staff accounts: %w", err)
+	}
+
+	accounts := make([]staff.Account, 0, len(rows))
+	for _, row := range rows {
+		accounts = append(accounts, staff.Account{
+			ID: int(row.ID), Email: row.Email, DisplayName: row.DisplayName,
+			Role: staff.Role(row.Role), Status: staff.AccountStatus(row.Status), CreatedAt: row.CreatedAt,
+		})
+	}
+
+	return accounts, nil
+}
+
 func (s *Store) LoadInvitedAccount(ctx context.Context, accountID int) (staff.Account, error) {
 	if accountID <= 0 || int64(accountID) > 1<<31-1 {
 		return staff.Account{}, staff.ErrInvalidAccountID

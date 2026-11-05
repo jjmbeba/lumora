@@ -39,6 +39,8 @@ The booking API uses this ring when creating invitations; run `go run ./cmd/staf
 
 ## Manager invitations
 
+`GET /staff/accounts` is manager-only and lists accounts in every status. Pagination uses `page` (default `1`) and `page_size` (default `20`, maximum `100`); `has_more` indicates whether another page exists. Optional `search` performs a case-insensitive substring search over email and display name. Example: `GET /staff/accounts?page=2&page_size=20&search=alex`.
+
 `POST /staff/accounts` accepts `{ "email", "display_name", "role" }` and is restricted to managers. It creates the `INVITED` account, stores a digest and encrypted retry copy of its random setup token, and queues a `STAFF_INVITATION` email in one transaction. The endpoint returns `202 Accepted`; it does not claim the email was delivered. The browser must send the configured `Origin` and `X-Staff-Request: 1` on this and other cookie-authenticated mutations.
 
 `POST /staff/accounts/{id}/invitation` resends setup to an invited account. It revokes the previous open invitation and cancels queued delivery before inserting a replacement invitation and email job in one transaction. A previously delivered link stops working as soon as this transaction commits.

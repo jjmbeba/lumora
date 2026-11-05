@@ -8,6 +8,16 @@ VALUES (
 )
 RETURNING id, email, display_name, role::text AS role, status::text AS status;
 
+-- name: ListStaffAccounts :many
+SELECT id, email, display_name, role::text AS role, status::text AS status, created_at
+FROM staff_accounts
+WHERE sqlc.arg(search)::text = ''
+   OR strpos(lower(email), lower(sqlc.arg(search)::text)) > 0
+   OR strpos(lower(display_name), lower(sqlc.arg(search)::text)) > 0
+ORDER BY lower(display_name), id
+LIMIT sqlc.arg(limit_count)::bigint
+OFFSET sqlc.arg(offset_count)::bigint;
+
 -- name: CreateStaffInvitation :one
 INSERT INTO staff_invitations (
     staff_account_id, token_digest, token_ciphertext, token_key_version,

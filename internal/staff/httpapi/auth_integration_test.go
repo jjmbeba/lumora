@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base32"
 	"encoding/binary"
@@ -25,6 +26,7 @@ import (
 const (
 	staffHTTPTestEmail    = "staff-http-auth-integration@example.test"
 	staffHTTPTestPassword = "staff-http-auth-integration-password"
+	staffHTTPScannerEmail = "staff-http-auth-integration-scanner@example.test"
 )
 
 func TestAuthHTTPFlowPostgres(t *testing.T) {
@@ -98,8 +100,23 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	invitationCipher, err := staff.NewInvitationTokenCipher(map[int16][]byte{1: make([]byte, 32)}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managementService, err := staff.NewManagementService(store, invitationCipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managementHandler, err := staffhttpapi.NewManagementHandler(managementService)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mux := http.NewServeMux()
 	if err := staffhttpapi.RegisterAuthRoutes(mux, handler); err != nil {
+		t.Fatal(err)
+	}
+	if err := staffhttpapi.RegisterManagementRoutes(mux, handler, managementHandler); err != nil {
 		t.Fatal(err)
 	}
 	mux.Handle("GET /staff/test-protected", handler.RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +201,63 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 		t.Fatalf("authenticated protected request = %d %q, want 200 %q", authorized.Code, authorized.Body.String(), staffHTTPTestEmail)
 	}
 
+	directoryUnauthenticated := httptest.NewRecorder()
+	mux.ServeHTTP(directoryUnauthenticated, httptest.NewRequest(http.MethodGet, "/staff/accounts", nil))
+	if directoryUnauthenticated.Code != http.StatusUnauthorized {
+		t.Fatalf("staff directory without a session status = %d, want %d", directoryUnauthenticated.Code, http.StatusUnauthorized)
+	}
+
+	directoryResponse := httptest.NewRecorder()
+	directoryRequest := httptest.NewRequest(http.MethodGet, "/staff/accounts?page=1&page_size=5&search=STAFF-HTTP-AUTH", nil)
+	directoryRequest.AddCookie(sessionCookie)
+	mux.ServeHTTP(directoryResponse, directoryRequest)
+	if directoryResponse.Code != http.StatusOK {
+		t.Fatalf("manager staff directory status = %d, body = %s", directoryResponse.Code, directoryResponse.Body.String())
+	}
+	var directory struct {
+		Accounts []struct {
+			ID          int       `json:"id"`
+			Email       string    `json:"email"`
+			DisplayName string    `json:"display_name"`
+			Role        string    `json:"role"`
+			Status      string    `json:"status"`
+			CreatedAt   time.Time `json:"created_at"`
+		} `json:"accounts"`
+		Page     int  `json:"page"`
+		PageSize int  `json:"page_size"`
+		HasMore  bool `json:"has_more"`
+	}
+	if err := json.Unmarshal(directoryResponse.Body.Bytes(), &directory); err != nil {
+		t.Fatalf("decode staff directory response: %v", err)
+	}
+	if directory.Page != 1 || directory.PageSize != 5 || directory.HasMore || len(directory.Accounts) != 1 {
+		t.Fatalf("staff directory response metadata/accounts = %+v, want page 1 size 5, one result, has_more false", directory)
+	}
+	listedAccount := directory.Accounts[0]
+	if listedAccount.Email != staffHTTPTestEmail || listedAccount.DisplayName != "HTTP Auth Test Owner" || listedAccount.Role != string(staff.RoleManager) || listedAccount.Status != string(staff.AccountStatusActive) || listedAccount.ID <= 0 || listedAccount.CreatedAt.IsZero() {
+		t.Fatalf("staff directory returned unexpected account: %+v", listedAccount)
+	}
+
+	scannerCookie, err := createStaffHTTPScannerSession(ctx, db)
+	if err != nil {
+		t.Fatalf("create scanner session fixture: %v", err)
+	}
+	forbiddenDirectory := httptest.NewRecorder()
+	forbiddenRequest := httptest.NewRequest(http.MethodGet, "/staff/accounts", nil)
+	forbiddenRequest.AddCookie(scannerCookie)
+	mux.ServeHTTP(forbiddenDirectory, forbiddenRequest)
+	if forbiddenDirectory.Code != http.StatusForbidden {
+		t.Fatalf("non-manager staff directory status = %d, want %d", forbiddenDirectory.Code, http.StatusForbidden)
+	}
+
+	invalidPage := httptest.NewRecorder()
+	invalidPageRequest := httptest.NewRequest(http.MethodGet, "/staff/accounts?page_size=101", nil)
+	invalidPageRequest.AddCookie(sessionCookie)
+	mux.ServeHTTP(invalidPage, invalidPageRequest)
+	if invalidPage.Code != http.StatusBadRequest {
+		t.Fatalf("staff directory invalid page_size status = %d, want %d", invalidPage.Code, http.StatusBadRequest)
+	}
+
 	logout := httptest.NewRecorder()
 	logoutRequest := httptest.NewRequest(http.MethodPost, "/staff/auth/logout", nil)
 	logoutRequest.AddCookie(sessionCookie)
@@ -221,14 +295,40 @@ func jsonRequest(t *testing.T, method, target string, value any) *http.Request {
 func deleteStaffHTTPFixture(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 		DELETE FROM staff_sessions
-		WHERE staff_account_id = (SELECT id FROM staff_accounts WHERE email = $1)
-	`, staffHTTPTestEmail); err != nil {
+		WHERE staff_account_id IN (SELECT id FROM staff_accounts WHERE email IN ($1, $2))
+	`, staffHTTPTestEmail, staffHTTPScannerEmail); err != nil {
 		return err
 	}
-	if _, err := db.ExecContext(ctx, `DELETE FROM staff_accounts WHERE email = $1`, staffHTTPTestEmail); err != nil {
+	if _, err := db.ExecContext(ctx, `DELETE FROM staff_accounts WHERE email IN ($1, $2)`, staffHTTPTestEmail, staffHTTPScannerEmail); err != nil {
 		return err
 	}
 	return nil
+}
+
+func createStaffHTTPScannerSession(ctx context.Context, db *sql.DB) (*http.Cookie, error) {
+	var accountID int
+	err := db.QueryRowContext(ctx, `
+		INSERT INTO staff_accounts (
+			email, display_name, role, status, password_hash,
+			mfa_secret_ciphertext, mfa_key_version, mfa_enabled_at
+		)
+		VALUES ($1, 'HTTP Auth Test Scanner', 'SCANNER', 'ACTIVE', 'integration-password-hash',
+			decode('01', 'hex'), 1, clock_timestamp())
+		RETURNING id`, staffHTTPScannerEmail,
+	).Scan(&accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	const sessionToken = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
+	digest := sha256.Sum256([]byte(sessionToken))
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO staff_sessions (staff_account_id, token_digest, expires_at)
+		VALUES ($1, $2, clock_timestamp() + interval '1 hour')`, accountID, digest[:],
+	); err != nil {
+		return nil, err
+	}
+	return &http.Cookie{Name: "staff_session", Value: sessionToken}, nil
 }
 
 func totpCodeForTest(secret string, now time.Time) string {
