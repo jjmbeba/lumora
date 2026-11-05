@@ -7,7 +7,7 @@ Accepted decisions for the project. `CONTEXT.md` remains the concise resume guid
 - Build an end-to-end backend in Go for one independent cinema at one location. A screening is a scheduled showing of a movie in an auditorium.
 - Use PostgreSQL as the database.
 - Use Paystack as the first payment provider, with card and M-Pesa checkout required. Merchant onboarding and sandbox validation remain gates. Defer direct Daraja integration until there is a legitimate merchant shortcode.
-- Use Resend for v1 transactional booking-access emails. Keep it behind a narrow email-sender interface owned by the consuming booking package; express that contract using application-owned message data, not Resend SDK types, and keep provider-specific request/response handling in `internal/email/resend`. A future provider switch should require replacing the adapter and its configuration/wiring, not changing booking policy or HTTP handlers. Do not add a multi-provider framework until the product needs one. Read `RESEND_API_KEY` and `EMAIL_FROM` from configuration. Production sending requires a verified sender domain whose DNS we control. The free tier's 100-email daily cap is a provider-wide limit; move to a paid plan or another approved capacity before expected traffic exceeds it. See `docs/research/email-provider-selection.md` for the dated provider comparison.
+- Use Resend for v1 transactional booking-access emails. Keep it behind a narrow email-sender interface owned by the consuming booking package; express that contract using application-owned message data, not Resend SDK types, and keep provider-specific request/response handling in `backend/internal/email/resend`. A future provider switch should require replacing the adapter and its configuration/wiring, not changing booking policy or HTTP handlers. Do not add a multi-provider framework until the product needs one. Read `RESEND_API_KEY` and `EMAIL_FROM` from configuration. Production sending requires a verified sender domain whose DNS we control. The free tier's 100-email daily cap is a provider-wide limit; move to a paid plan or another approved capacity before expected traffic exceeds it. See `docs/research/email-provider-selection.md` for the dated provider comparison.
 
 ## Booking and payment behavior
 
@@ -63,12 +63,12 @@ Accepted decisions for the project. `CONTEXT.md` remains the concise resume guid
 
 ## Go structure
 
-- Use one Go module at the repository root and a modular-monolith architecture. Do not split into services without a concrete need.
+- Use one Go module in `backend/` and a modular-monolith architecture. Do not split into services without a concrete need.
 - Put executable entry points in `cmd/api`, `cmd/payment-worker`, and `cmd/ticket-email-worker`. Keep their behavior in shared internal packages so they can run as separate processes without duplicating rules.
-- Put application implementation under `internal/`, organized around domain responsibilities such as `booking`, `screening`, and `payment`. Use `httpapi`, `config`, and `app` for transport, configuration, and dependency wiring.
-- Keep PostgreSQL adapters near the feature they implement, such as `internal/booking/postgres`. Define small interfaces in the consuming package; concrete implementations satisfy them implicitly.
-- Keep numbered Goose SQL migrations under the root `migrations/` directory. Run them explicitly with `go run ./cmd/migrate up` before starting APIs or workers; check state with `go run ./cmd/migrate status`. Do not run migrations from service startup. The migration command embeds the SQL files and uses an explicit Goose provider.
-- Use sqlc v1.31.1 for typed reads and writes in the booking, payment, and ticket PostgreSQL adapters. Keep named query files inside each adapter's `queries/` directory, generate into its `dbgen/` package, and use Goose's `migrations/` directory as sqlc's schema input. Goose applies migrations; sqlc only analyzes the up migrations and generates code. Regenerate with `go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate` after changing queries or schema.
+- Put application implementation under `backend/internal/`, organized around domain responsibilities such as `booking`, `screening`, and `payment`. Use `httpapi`, `config`, and `app` for transport, configuration, and dependency wiring.
+- Keep PostgreSQL adapters near the feature they implement, such as `backend/internal/booking/postgres`. Define small interfaces in the consuming package; concrete implementations satisfy them implicitly.
+- Keep numbered Goose SQL migrations under the root `backend/migrations/` directory. Run them explicitly with `cd backend && go run ./cmd/migrate up` before starting APIs or workers; check state with `cd backend && go run ./cmd/migrate status`. Do not run migrations from service startup. The migration command embeds the SQL files and uses an explicit Goose provider.
+- Use sqlc v1.31.1 for typed reads and writes in the booking, payment, and ticket PostgreSQL adapters. Keep named query files inside each adapter's `queries/` directory, generate into its `dbgen/` package, and use Goose's `backend/migrations/` directory as sqlc's schema input. Goose applies migrations; sqlc only analyzes the up migrations and generates code. Regenerate with `cd backend && go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 generate` after changing queries or schema.
 - Keep generated database types inside each PostgreSQL adapter and map them to domain types there. The adapter retains transaction ownership; generated queries called inside a transaction must use a query object bound to that existing `*sql.Tx`.
 - Use `GENERATED BY DEFAULT AS IDENTITY` for surrogate `id` primary keys. Inserts should omit generated IDs and use `RETURNING id` when the caller needs the assigned value. Explicit IDs remain available for fixtures, but do not advance the identity sequence; reseed the sequence or avoid explicit IDs before relying on generated values.
 - Keep the layout lean: do not create packages for every layer or generic `common`, `util`, `types`, or `repository` packages without a concrete need.
@@ -107,11 +107,11 @@ Example starting layout (create packages as implementation needs them; this is a
 └── go.mod
 ```
 
-Feature packages own their domain behavior and consuming interfaces; adapters stay beside the feature. `cmd/*/main.go` should stay small and delegate setup to `internal/app`.
+Feature packages own their domain behavior and consuming interfaces; adapters stay beside the feature. `cmd/*/main.go` should stay small and delegate setup to `backend/internal/app`.
 
 ## Design defaults
 
-- Use small interfaces at real boundaries, including database and provider clients, and wire dependencies explicitly through constructors in `internal/app`. Do not add a DI framework or global dependencies by default.
+- Use small interfaces at real boundaries, including database and provider clients, and wire dependencies explicitly through constructors in `backend/internal/app`. Do not add a DI framework or global dependencies by default.
 - Make transaction boundaries explicit around booking/seat claims and worker claim/reclaim. Commit before making provider network calls.
 - Define allowed booking, payment, and initialization state transitions in Go. Guard SQL updates on the expected current status and check affected rows. Fence worker completion with an attempt/generation token so an expired worker cannot overwrite a newer attempt.
 - Claim due `QUEUED`/`UNKNOWN`/`READY` rows and expired `SUBMITTING` rows transactionally with `FOR UPDATE SKIP LOCKED`; increment the attempt generation and set the lease in that short transaction, then commit before provider calls. `QUEUED` rows initialize; `READY` rows verify the stored reference; expired or unknown rows reconcile by stored reference before any initialization retry. Keep unresolved results in `UNKNOWN`; do not assume Paystack initialization is idempotent without provider evidence. See [payment worker recovery](payment-worker-recovery.md).

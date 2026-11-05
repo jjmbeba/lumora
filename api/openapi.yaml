@@ -1,0 +1,111 @@
+openapi: 3.1.1
+info:
+  title: Lumora Staff API
+  version: 1.0.0
+  description: HTTP contract for browser-facing staff authentication and management.
+servers:
+  - url: /
+paths:
+  /staff/accounts:
+    get:
+      operationId: listStaffAccounts
+      summary: Search and paginate staff accounts
+      security:
+        - staffSession: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: search
+          in: query
+          schema: { type: string, maxLength: 100 }
+      responses:
+        '200':
+          description: Staff account page
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffAccountPage'
+        '400':
+          description: Invalid pagination or search options
+        '401':
+          description: Missing or invalid staff session
+        '403':
+          description: The signed-in staff member is not a manager
+  /staff/auth/login:
+    post:
+      operationId: startStaffLogin
+      summary: Verify staff password and begin MFA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200': { description: MFA challenge created }
+        '400': { description: Invalid request }
+        '401': { description: Invalid credentials }
+        '429': { description: Login rate limit reached }
+  /staff/auth/mfa:
+    post:
+      operationId: completeStaffLogin
+      summary: Complete MFA and set the staff session cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [challenge, code]
+              properties:
+                challenge: { type: string }
+                code: { type: string }
+      responses:
+        '200': { description: Session established; response includes Set-Cookie }
+        '400': { description: Invalid request }
+        '401': { description: Invalid or expired challenge }
+  /staff/auth/logout:
+    post:
+      operationId: logoutStaff
+      summary: Revoke the current staff session
+      security:
+        - staffSession: []
+      responses:
+        '204': { description: Session revoked }
+        '401': { description: Missing or invalid staff session }
+        '403': { description: CSRF origin check failed }
+components:
+  securitySchemes:
+    staffSession:
+      type: apiKey
+      in: cookie
+      name: staff_session
+  schemas:
+    StaffAccount:
+      type: object
+      required: [id, email, display_name, role, status, created_at]
+      properties:
+        id: { type: integer }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        role: { type: string, enum: [MANAGER, SCANNER] }
+        status: { type: string, enum: [INVITED, ACTIVE, DISABLED] }
+        created_at: { type: string, format: date-time }
+    StaffAccountPage:
+      type: object
+      required: [accounts, page, page_size, has_more]
+      properties:
+        accounts:
+          type: array
+          items: { $ref: '#/components/schemas/StaffAccount' }
+        page: { type: integer }
+        page_size: { type: integer }
+        has_more: { type: boolean }
