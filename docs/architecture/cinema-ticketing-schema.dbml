@@ -260,6 +260,9 @@ Table staff_accounts {
   role StaffRole [not null]
   status StaffAccountStatus [not null]
   password_hash varchar [note: 'Adaptive password hash; null until invitation setup completes']
+  mfa_secret_ciphertext bytea [note: 'Encrypted TOTP secret; null until enrollment begins']
+  mfa_key_version smallint
+  mfa_enabled_at timestamptz
   is_bootstrap_owner boolean [not null, default: false]
   created_by_staff_account_id integer
   created_at timestamptz [not null]
@@ -270,7 +273,52 @@ Table staff_accounts {
     `display_name <> '' AND display_name = btrim(display_name)` [name: 'staff_accounts_display_name_not_empty']
     `status <> 'INVITED' OR password_hash IS NULL` [name: 'staff_invited_account_has_no_password']
     `status <> 'ACTIVE' OR password_hash IS NOT NULL` [name: 'staff_active_account_requires_password']
+    `status <> 'ACTIVE' OR mfa_enabled_at IS NOT NULL` [name: 'staff_active_account_requires_mfa']
     `NOT is_bootstrap_owner OR role = 'MANAGER'` [name: 'staff_bootstrap_owner_is_manager']
+    `(mfa_secret_ciphertext IS NULL) = (mfa_key_version IS NULL)` [name: 'staff_accounts_mfa_ciphertext_key_version_pair']
+    `mfa_key_version IS NULL OR mfa_key_version > 0` [name: 'staff_accounts_mfa_key_version_positive']
+    `mfa_enabled_at IS NULL OR mfa_secret_ciphertext IS NOT NULL` [name: 'staff_accounts_mfa_enabled_has_secret']
+  }
+}
+
+// Recovery codes are random, single-use credentials. Store only their SHA-256
+// digests and consume each code atomically.
+Table staff_recovery_codes {
+  id integer [primary key]
+  staff_account_id integer [not null]
+  code_digest bytea [not null, unique, note: '32-byte SHA-256 digest of one recovery code']
+  created_at timestamptz [not null]
+  consumed_at timestamptz
+
+  indexes {
+    staff_account_id
+  }
+
+  checks {
+    `octet_length(code_digest) = 32` [name: 'staff_recovery_codes_digest_length']
+  }
+}
+
+// Password verification creates a short-lived challenge, never a session.
+Table staff_auth_challenges {
+  id integer [primary key]
+  staff_account_id integer [not null]
+  token_digest bytea [not null, unique, note: '32-byte SHA-256 digest of opaque challenge token']
+  purpose varchar [not null, note: 'MFA_SIGN_IN or MFA_ENROLLMENT']
+  created_at timestamptz [not null]
+  expires_at timestamptz [not null]
+  failed_attempts smallint [not null, default: 0]
+  consumed_at timestamptz
+
+  indexes {
+    (staff_account_id, expires_at)
+  }
+
+  checks {
+    `octet_length(token_digest) = 32` [name: 'staff_auth_challenges_digest_length']
+    `purpose IN ('MFA_SIGN_IN', 'MFA_ENROLLMENT')` [name: 'staff_auth_challenges_purpose_valid']
+    `expires_at > created_at` [name: 'staff_auth_challenges_expiry_after_creation']
+    `failed_attempts BETWEEN 0 AND 5` [name: 'staff_auth_challenges_attempts_bounded']
   }
 }
 
@@ -383,6 +431,8 @@ Ref: staff_accounts.created_by_staff_account_id > staff_accounts.id
 Ref: staff_invitations.staff_account_id > staff_accounts.id
 Ref: staff_invitations.created_by_staff_account_id > staff_accounts.id
 Ref: staff_sessions.staff_account_id > staff_accounts.id
+Ref: staff_recovery_codes.staff_account_id > staff_accounts.id
+Ref: staff_auth_challenges.staff_account_id > staff_accounts.id
 Ref: email_outbox.booking_id > bookings.id
 Ref: email_outbox.staff_invitation_id > staff_invitations.id
 

@@ -526,6 +526,22 @@ type StaffAccount struct {
 	CreatedByStaffAccountID sql.NullInt32
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
+	// Encrypted TOTP secret; application-managed versioned key material is kept outside PostgreSQL.
+	MfaSecretCiphertext []byte
+	MfaKeyVersion       sql.NullInt16
+	MfaEnabledAt        sql.NullTime
+}
+
+// Short-lived password-authenticated challenges; a full staff session is issued only after successful MFA.
+type StaffAuthChallenge struct {
+	ID             int32
+	StaffAccountID int32
+	TokenDigest    []byte
+	Purpose        string
+	FailedAttempts int16
+	CreatedAt      time.Time
+	ExpiresAt      time.Time
+	ConsumedAt     sql.NullTime
 }
 
 // Single-use staff password-setup invitations. Clear token_ciphertext and token_key_version after successful email delivery or consumption, retaining the digest for validation.
@@ -540,6 +556,15 @@ type StaffInvitation struct {
 	RevokedAt               sql.NullTime
 	CreatedByStaffAccountID int32
 	CreatedAt               time.Time
+}
+
+// Ten single-use recovery codes per staff account; only SHA-256 digests are stored.
+type StaffRecoveryCode struct {
+	ID             int32
+	StaffAccountID int32
+	CodeDigest     []byte
+	CreatedAt      time.Time
+	ConsumedAt     sql.NullTime
 }
 
 type StaffSession struct {

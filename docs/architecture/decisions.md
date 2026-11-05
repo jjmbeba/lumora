@@ -43,10 +43,14 @@ Accepted decisions for the project. `CONTEXT.md` remains the concise resume guid
 - Create the first owner account through a one-time bootstrap path. Afterward, managers create individual staff accounts through a manager-only frontend flow; do not expose public self-registration.
 - Protect first-owner setup with a high-entropy secret configured outside the database, and disable the bootstrap path immediately after the first owner is created.
 - Authenticate staff with their individual email and password, then issue an expiring revocable session. Store passwords only as adaptive password hashes, never as plaintext. Do not reuse customer booking-access tokens for staff authentication.
+- Protect cookie-authenticated staff mutations with an exact configured frontend `Origin` check and a required `X-Staff-Request: 1` header; use `HttpOnly`, `Secure`, `SameSite=Strict` session cookies.
+- Require authenticator-app TOTP for every staff account before issuing a full session. Provide 10 single-use recovery codes at MFA enrollment; persist only their digests and consume them atomically. Store TOTP secrets encrypted with a versioned key kept outside PostgreSQL. MFA sign-in/enrollment challenges are short-lived and never authorize ticket redemption.
+- The initial implementation contract and required environment key rings are tracked in [staff-authentication.md](staff-authentication.md).
 - Keep scanner sessions valid for at most 8 hours, with explicit logout and immediate revocation when an account is deactivated.
 - Expire a scanner session after 15 minutes of inactivity, even if its work-shift maximum has not elapsed.
 - Use two staff roles in v1: `MANAGER` can provision/deactivate staff and redeem tickets; `SCANNER` can redeem tickets only. The first owner account is a manager.
-- When a manager creates a staff account, email a single-use setup link for the new staff member to choose a password; keep the account inactive until setup completes. Deactivating an account revokes its active sessions.
+- When a manager creates a staff account, email a single-use setup link that expires after 24 hours. Keep the account inactive until the staff member chooses a password and completes TOTP enrollment. Resending replaces the outstanding invitation and invalidates its old link. Deactivating an account revokes its active sessions and any open invitation.
+- Do not allow deactivation of the last active manager; losing all active managers would lock out staff administration.
 - Require a live backend connection for ticket scans in v1 so the scan can check current booking status and redeem the ticket atomically; offline admission and later conflict resolution are deferred.
 
 ## Idempotency and provider recovery

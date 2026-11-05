@@ -28,6 +28,8 @@ Build a reliable end-to-end backend for a single independent cinema, using Go. T
 - Create the first owner account through a one-time bootstrap path; managers then provision staff through a manager-only frontend flow, with no public signup.
 - Protect first-owner setup with a high-entropy secret configured outside the database; disable bootstrap immediately after creating the first owner.
 - Staff sign in with individual email/password credentials and receive an expiring revocable session; store only adaptive password hashes, never plaintext, and keep staff auth separate from customer booking tokens.
+- Require authenticator-app TOTP for every staff account. Staff must complete MFA before receiving a full session. Issue 10 single-use recovery codes at enrollment, store only their digests, and consume each atomically.
+- Keep pending MFA sign-in/enrollment challenges short-lived and separate from staff sessions. Encrypt TOTP secrets at rest with a versioned key configured outside the database.
 - Scanner sessions last at most 8 hours; staff can log out, and deactivation revokes sessions immediately.
 - Expire scanner sessions after 15 minutes of inactivity.
 - Staff roles: `MANAGER` can provision/deactivate staff and redeem tickets; `SCANNER` can redeem tickets only. The first owner is a manager.
@@ -71,7 +73,8 @@ Agreed design defaults:
 - `docs/research/kenya-online-payment-options.md` — provider research.
 - `docs/research/go-project-structure.md` — official Go guidance and the proposed project structure.
 - `docs/architecture/decisions.md` — accepted product, architecture, and design decisions plus deferred choices.
-- `migrations/00001_core_schema.sql` through `migrations/00007_ticketing_staff_email_outbox.sql` — versioned Goose SQL migrations. Run `go run ./cmd/migrate up` before starting services and `go run ./cmd/migrate status` to inspect the database version. Docker Compose starts PostgreSQL only; it no longer applies schema scripts through the image initialization hook.
+- `docs/architecture/staff-authentication.md` — staff bootstrap/sign-in/session flow and required MFA key configuration; it also records remaining staff-auth work.
+- `migrations/00001_core_schema.sql` through `migrations/00008_staff_authentication.sql` — versioned Goose SQL migrations. Run `go run ./cmd/migrate up` before starting services and `go run ./cmd/migrate status` to inspect the database version. Docker Compose starts PostgreSQL only; it no longer applies schema scripts through the image initialization hook.
 
 ## Important database invariants to implement
 
@@ -87,7 +90,7 @@ Agreed design defaults:
 
 The Go payment worker, Paystack adapter, PostgreSQL state transitions, signed webhook inbox, email verification flow, and token-protected booking-details endpoint are implemented. The details endpoint now reveals each booked seat’s decrypted QR credential only after validating the booking access token; reserved bookings do not include ticket data. The customer booking/payment flow has reached `PAID`/`PAID`/`BOOKED` in the Paystack sandbox, and webhook replay was checked locally. `MarkPaid` creates one encrypted ticket per saved booking seat and queues one durable ticket email in the same transaction. The ticket email worker claims outbox jobs with leases, decrypts stable ticket credentials, renders inline QR images, and retries delivery with Resend idempotency keys. The schema is managed by embedded Goose migrations; run `go run ./cmd/migrate up` before starting services. `cinema_ticketing_test` still needs its disposable schema recreated through Goose to establish the Goose version history. Focused PostgreSQL tests for `MarkPaid` and outbox claim/retry/fencing passed on 2026-11-04. The `internal/ticket` credential cipher is configured from a versioned environment key ring. The logical schema is in [the DBML schema](docs/architecture/cinema-ticketing-schema.dbml).
 
-Next: before enabling tickets in an environment with retained pre-feature `BOOKED` rows, run an idempotent application-level backfill for their ticket credentials and email jobs; disposable local data can be reseeded. Then implement staff authentication/onboarding and online ticket redemption. Keep the accepted invariants in this file and [the architecture decisions](docs/architecture/decisions.md).
+Next: before enabling tickets in an environment with retained pre-feature `BOOKED` rows, run an idempotent application-level backfill for their ticket credentials and email jobs; disposable local data can be reseeded. The first-owner bootstrap and password/MFA sign-in are implemented, but need verification. Next implement manager invitations/deactivation, role-protected online ticket redemption, and a distributed login rate limit; then perform the retained-booking ticket backfill. See [staff authentication](docs/architecture/staff-authentication.md) and [the architecture decisions](docs/architecture/decisions.md).
 
 ## How to resume in a new Codex chat
 

@@ -20,6 +20,9 @@ import (
 	"example.com/cinema-tickets-backend/internal/config"
 	"example.com/cinema-tickets-backend/internal/email/resend"
 	paymentpostgres "example.com/cinema-tickets-backend/internal/payment/postgres"
+	staffdomain "example.com/cinema-tickets-backend/internal/staff"
+	staffhttpapi "example.com/cinema-tickets-backend/internal/staff/httpapi"
+	staffpostgres "example.com/cinema-tickets-backend/internal/staff/postgres"
 	"example.com/cinema-tickets-backend/internal/ticket"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -41,6 +44,10 @@ func runMain() error {
 	listenAddr := os.Getenv("BOOKING_API_ADDR")
 	if listenAddr == "" {
 		listenAddr = ":8081"
+	}
+	staffFrontendOrigin, err := config.RequireEnv("STAFF_FRONTEND_ORIGIN")
+	if err != nil {
+		return err
 	}
 
 	resendApiKey, err := config.RequireEnv("RESEND_API_KEY")
@@ -67,6 +74,24 @@ func runMain() error {
 	if err != nil {
 		return fmt.Errorf("configure ticket credential cipher: %w", err)
 	}
+	staffMFAKeyring, err := config.StaffMFAKeyringFromEnv()
+	if err != nil {
+		return err
+	}
+	defer clearStaffMFAKeys(staffMFAKeyring.Keys)
+	staffMFACipher, err := staffdomain.NewMFACipher(staffMFAKeyring.Keys, staffMFAKeyring.CurrentVersion)
+	if err != nil {
+		return fmt.Errorf("configure staff MFA cipher: %w", err)
+	}
+	staffInvitationKeyring, err := config.StaffInvitationKeyringFromEnv()
+	if err != nil {
+		return err
+	}
+	defer clearStaffInvitationKeys(staffInvitationKeyring.Keys)
+	staffInvitationCipher, err := staffdomain.NewInvitationTokenCipher(staffInvitationKeyring.Keys, staffInvitationKeyring.CurrentVersion)
+	if err != nil {
+		return fmt.Errorf("configure staff invitation token cipher: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
@@ -76,10 +101,10 @@ func runMain() error {
 
 	defer stop()
 
-	return run(ctx, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr, credentialCipher)
+	return run(ctx, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr, staffFrontendOrigin, credentialCipher, staffMFACipher, staffInvitationCipher)
 }
 
-func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr string, credentialCipher *ticket.CredentialCipher) error {
+func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr, staffFrontendOrigin string, credentialCipher *ticket.CredentialCipher, staffMFACipher *staffdomain.MFACipher, staffInvitationCipher *staffdomain.InvitationTokenCipher) error {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("open database pool: %w", err)
@@ -137,6 +162,28 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 	if err != nil {
 		return err
 	}
+	staffStore, err := staffpostgres.NewStore(db)
+	if err != nil {
+		return err
+	}
+	staffAuthService, err := staffdomain.NewAuthService(staffStore, staffMFACipher)
+	if err != nil {
+		return err
+	}
+	staffAuthHandler, err := staffhttpapi.NewAuthHandler(staffAuthService, true, staffFrontendOrigin)
+	if err != nil {
+		return err
+	}
+	staffManagementService, err := staffdomain.NewManagementService(staffStore, staffInvitationCipher)
+	if err != nil {
+		return err
+	}
+
+	staffManagementHandler, err := staffhttpapi.NewManagementHandler(staffManagementService)
+	if err != nil {
+		return err
+	}
+
 	paymentInitializationHandler, err := httpapi.NewPaymentInitializationStatusHandler(checkoutService, verificationService)
 	if err != nil {
 		return err
@@ -151,6 +198,12 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 	mux.Handle("POST /bookings", bookingHandler)
 	mux.Handle("GET /bookings/{reference}", bookingDetailsHandler)
 	mux.Handle("GET /bookings/{reference}/payment-initialization", paymentInitializationHandler)
+	if err := staffhttpapi.RegisterAuthRoutes(mux, staffAuthHandler); err != nil {
+		return err
+	}
+	if err := staffhttpapi.RegisterManagementRoutes(mux, staffAuthHandler, staffManagementHandler); err != nil {
+		return err
+	}
 
 	if err := httpapi.RegisterEmailVerificationRoutes(mux, emailHandler, verificationRateLimiter); err != nil {
 		return err
@@ -199,6 +252,18 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 }
 
 func clearCredentialKeys(keys map[int16][]byte) {
+	for _, key := range keys {
+		clear(key)
+	}
+}
+
+func clearStaffMFAKeys(keys map[int16][]byte) {
+	for _, key := range keys {
+		clear(key)
+	}
+}
+
+func clearStaffInvitationKeys(keys map[int16][]byte) {
 	for _, key := range keys {
 		clear(key)
 	}

@@ -24,3 +24,11 @@ sql:
         package: "dbgen"
         out: "internal/ticket/postgres/dbgen"
         sql_package: "database/sql"
+  - engine: "postgresql"
+    schema: "migrations"
+    queries: "internal/staff/postgres/queries"
+    gen:
+      go:
+        package: "dbgen"
+        out: "internal/staff/postgres/dbgen"
+        sql_package: "database/sql"
