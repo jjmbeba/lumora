@@ -168,6 +168,25 @@ func (h *AuthHandler) RequireSession(next http.Handler) http.Handler {
 	})
 }
 
+// RequireRole authenticates the session and allows the request only when the
+// current account has the required role.
+func (h *AuthHandler) RequireRole(required staff.Role, next http.Handler) http.Handler {
+	return h.RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := IdentityFromContext(r)
+		if !ok {
+			http.Error(w, "staff authentication required", http.StatusUnauthorized)
+			return
+		}
+
+		if identity.Role != required {
+			http.Error(w, "staff role does not permit this action", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}))
+}
+
 type identityContextKey struct{}
 
 func IdentityFromContext(r *http.Request) (staff.Identity, bool) {

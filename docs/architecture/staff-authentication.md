@@ -9,6 +9,8 @@ The accepted staff-authentication decisions are in [decisions.md](decisions.md).
 3. The response sets the opaque session token in an `HttpOnly`, `Secure`, `SameSite=Strict` cookie. PostgreSQL stores only its SHA-256 digest. Protected handlers use `AuthHandler.RequireSession`, which checks account status, absolute expiry, and the 15-minute idle limit on each request.
 4. `POST /staff/auth/logout` revokes the session and clears the cookie.
 
+Manager-only handlers must use `AuthHandler.RequireRole(staff.RoleManager, handler)`. It authenticates the session first, then returns `403 Forbidden` when the authenticated account is not a manager. Do not authorize from a client-supplied role or trust a role copied into a session cookie.
+
 Sessions expire after eight hours even when active. An MFA challenge allows at most five failed attempts. Recovery-code consumption and challenge consumption are atomic with session creation.
 
 ## MFA encryption configuration
