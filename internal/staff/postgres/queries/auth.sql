@@ -106,3 +106,38 @@ WHERE token_digest = sqlc.arg(token_digest) AND revoked_at IS NULL;
 UPDATE staff_sessions
 SET revoked_at = clock_timestamp()
 WHERE staff_account_id = sqlc.arg(staff_account_id) AND revoked_at IS NULL;
+
+-- name: LockActiveStaffManagers :many
+SELECT id FROM staff_accounts
+WHERE role = 'MANAGER' AND status = 'ACTIVE'
+ORDER BY id
+FOR UPDATE;
+
+-- name: LockStaffAccount :one
+SELECT id, role::text AS role, status::text AS status
+FROM staff_accounts
+WHERE id = sqlc.arg(id)
+FOR UPDATE;
+
+-- name: DisableStaffAccount :execrows
+UPDATE staff_accounts
+SET status = 'DISABLED', updated_at = clock_timestamp()
+WHERE id = sqlc.arg(id) AND status <> 'DISABLED';
+
+-- name: CancelStaffInvitationEmailJobs :exec
+UPDATE email_outbox
+SET status = 'FAILED', lease_expires_at = NULL, sent_at = NULL,
+    last_error_code = 'invitation_revoked', updated_at = clock_timestamp()
+WHERE kind = 'STAFF_INVITATION'
+  AND status IN ('QUEUED', 'SENDING')
+  AND staff_invitation_id IN (
+    SELECT id FROM staff_invitations
+    WHERE staff_account_id = sqlc.arg(staff_account_id)
+      AND consumed_at IS NULL AND revoked_at IS NULL
+  );
+
+-- name: RevokeOpenStaffInvitations :exec
+UPDATE staff_invitations
+SET revoked_at = clock_timestamp(), token_ciphertext = NULL, token_key_version = NULL
+WHERE staff_account_id = sqlc.arg(staff_account_id)
+  AND consumed_at IS NULL AND revoked_at IS NULL;

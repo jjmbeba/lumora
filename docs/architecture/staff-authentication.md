@@ -11,6 +11,8 @@ The accepted staff-authentication decisions are in [decisions.md](decisions.md).
 
 Manager-only handlers must use `AuthHandler.RequireRole(staff.RoleManager, handler)`. It authenticates the session first, then returns `403 Forbidden` when the authenticated account is not a manager. Do not authorize from a client-supplied role or trust a role copied into a session cookie.
 
+`POST /staff/accounts/{id}/deactivation` is manager-only. It disables the account and revokes its sessions and any open invitation in one transaction. It returns `409 Conflict` when the target is the last active manager.
+
 Sessions expire after eight hours even when active. An MFA challenge allows at most five failed attempts. Recovery-code consumption and challenge consumption are atomic with session creation.
 
 ## MFA encryption configuration
@@ -50,5 +52,5 @@ The test creates and removes its own fixture account. It covers password login, 
 
 ## Current implementation boundary
 
-The initial-owner bootstrap and password/MFA sign-in/session path are implemented. Manager invitations/deactivation, role-protected staff operations, and a distributed login rate limit remain separate implementation work.
+The initial-owner bootstrap, password/MFA sign-in/session path, and manager account deactivation are implemented. Manager invitations, invitation acceptance/MFA enrollment, and a distributed login rate limit remain separate implementation work.
 

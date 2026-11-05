@@ -161,6 +161,16 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 	if err != nil {
 		return err
 	}
+	staffManagementService, err := staffdomain.NewManagementService(staffStore)
+	if err != nil {
+		return err
+	}
+
+	staffManagementHandler, err := staffhttpapi.NewManagementHandler(staffManagementService)
+	if err != nil {
+		return err
+	}
+
 	paymentInitializationHandler, err := httpapi.NewPaymentInitializationStatusHandler(checkoutService, verificationService)
 	if err != nil {
 		return err
@@ -176,6 +186,9 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 	mux.Handle("GET /bookings/{reference}", bookingDetailsHandler)
 	mux.Handle("GET /bookings/{reference}/payment-initialization", paymentInitializationHandler)
 	if err := staffhttpapi.RegisterAuthRoutes(mux, staffAuthHandler); err != nil {
+		return err
+	}
+	if err := staffhttpapi.RegisterManagementRoutes(mux, staffAuthHandler, staffManagementHandler); err != nil {
 		return err
 	}
 

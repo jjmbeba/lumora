@@ -49,6 +49,7 @@ Accepted decisions for the project. `CONTEXT.md` remains the concise resume guid
 - Expire a scanner session after 15 minutes of inactivity, even if its work-shift maximum has not elapsed.
 - Use two staff roles in v1: `MANAGER` can provision/deactivate staff and redeem tickets; `SCANNER` can redeem tickets only. The first owner account is a manager.
 - When a manager creates a staff account, email a single-use setup link for the new staff member to choose a password; keep the account inactive until setup completes. Deactivating an account revokes its active sessions.
+- Do not allow deactivation of the last active manager; losing all active managers would lock out staff administration.
 - Require a live backend connection for ticket scans in v1 so the scan can check current booking status and redeem the ticket atomically; offline admission and later conflict resolution are deferred.
 
 ## Idempotency and provider recovery

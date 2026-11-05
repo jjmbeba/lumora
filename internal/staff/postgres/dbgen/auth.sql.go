@@ -59,6 +59,24 @@ func (q *Queries) BootstrapOwnerExists(ctx context.Context) (bool, error) {
 	return exists, err
 }
 
+const cancelStaffInvitationEmailJobs = `-- name: CancelStaffInvitationEmailJobs :exec
+UPDATE email_outbox
+SET status = 'FAILED', lease_expires_at = NULL, sent_at = NULL,
+    last_error_code = 'invitation_revoked', updated_at = clock_timestamp()
+WHERE kind = 'STAFF_INVITATION'
+  AND status IN ('QUEUED', 'SENDING')
+  AND staff_invitation_id IN (
+    SELECT id FROM staff_invitations
+    WHERE staff_account_id = $1
+      AND consumed_at IS NULL AND revoked_at IS NULL
+  )
+`
+
+func (q *Queries) CancelStaffInvitationEmailJobs(ctx context.Context, staffAccountID int32) error {
+	_, err := q.db.ExecContext(ctx, cancelStaffInvitationEmailJobs, staffAccountID)
+	return err
+}
+
 const consumeAuthChallenge = `-- name: ConsumeAuthChallenge :execrows
 UPDATE staff_auth_challenges
 SET consumed_at = clock_timestamp()
@@ -194,6 +212,20 @@ func (q *Queries) CreateStaffSession(ctx context.Context, arg CreateStaffSession
 	return i, err
 }
 
+const disableStaffAccount = `-- name: DisableStaffAccount :execrows
+UPDATE staff_accounts
+SET status = 'DISABLED', updated_at = clock_timestamp()
+WHERE id = $1 AND status <> 'DISABLED'
+`
+
+func (q *Queries) DisableStaffAccount(ctx context.Context, id int32) (int64, error) {
+	result, err := q.db.ExecContext(ctx, disableStaffAccount, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const findLoginCredentials = `-- name: FindLoginCredentials :one
 SELECT id, email, display_name, role::text AS role, status::text AS status,
        password_hash, mfa_secret_ciphertext, mfa_key_version,
@@ -293,6 +325,36 @@ func (q *Queries) LoadAuthChallenge(ctx context.Context, tokenDigest []byte) (Lo
 	return i, err
 }
 
+const lockActiveStaffManagers = `-- name: LockActiveStaffManagers :many
+SELECT id FROM staff_accounts
+WHERE role = 'MANAGER' AND status = 'ACTIVE'
+ORDER BY id
+FOR UPDATE
+`
+
+func (q *Queries) LockActiveStaffManagers(ctx context.Context) ([]int32, error) {
+	rows, err := q.db.QueryContext(ctx, lockActiveStaffManagers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int32
+	for rows.Next() {
+		var id int32
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockAuthChallenge = `-- name: LockAuthChallenge :one
 SELECT c.id AS challenge_id, c.staff_account_id, c.purpose,
        c.failed_attempts, c.expires_at, c.consumed_at,
@@ -341,6 +403,26 @@ func (q *Queries) LockAuthChallenge(ctx context.Context, tokenDigest []byte) (Lo
 	return i, err
 }
 
+const lockStaffAccount = `-- name: LockStaffAccount :one
+SELECT id, role::text AS role, status::text AS status
+FROM staff_accounts
+WHERE id = $1
+FOR UPDATE
+`
+
+type LockStaffAccountRow struct {
+	ID     int32
+	Role   string
+	Status string
+}
+
+func (q *Queries) LockStaffAccount(ctx context.Context, id int32) (LockStaffAccountRow, error) {
+	row := q.db.QueryRowContext(ctx, lockStaffAccount, id)
+	var i LockStaffAccountRow
+	err := row.Scan(&i.ID, &i.Role, &i.Status)
+	return i, err
+}
+
 const recordAuthChallengeFailure = `-- name: RecordAuthChallengeFailure :execrows
 UPDATE staff_auth_challenges
 SET failed_attempts = failed_attempts + 1,
@@ -355,6 +437,18 @@ func (q *Queries) RecordAuthChallengeFailure(ctx context.Context, id int32) (int
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const revokeOpenStaffInvitations = `-- name: RevokeOpenStaffInvitations :exec
+UPDATE staff_invitations
+SET revoked_at = clock_timestamp(), token_ciphertext = NULL, token_key_version = NULL
+WHERE staff_account_id = $1
+  AND consumed_at IS NULL AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeOpenStaffInvitations(ctx context.Context, staffAccountID int32) error {
+	_, err := q.db.ExecContext(ctx, revokeOpenStaffInvitations, staffAccountID)
+	return err
 }
 
 const revokeStaffAccountSessions = `-- name: RevokeStaffAccountSessions :exec

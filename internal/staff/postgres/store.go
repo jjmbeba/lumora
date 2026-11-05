@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 type Store struct{ db *sql.DB }
 
 var _ staff.Store = (*Store)(nil)
+var _ staff.ManagementStore = (*Store)(nil)
 
 func NewStore(db *sql.DB) (*Store, error) {
 	if db == nil {
@@ -259,5 +261,58 @@ func (s *Store) RevokeSession(ctx context.Context, digest []byte) error {
 		return fmt.Errorf("revoke staff session: %w", err)
 	}
 
+	return nil
+}
+
+func (s *Store) DeactivateAccount(ctx context.Context, managerID, accountID int) error {
+	if managerID <= 0 || accountID <= 0 || int64(managerID) > 1<<31-1 || int64(accountID) > 1<<31-1 {
+		return staff.ErrInvalidAccountID
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin staff account deactivation transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	queries := dbgen.New(tx)
+	managerIDs, err := queries.LockActiveStaffManagers(ctx)
+	if err != nil {
+		return fmt.Errorf("lock active staff managers: %w", err)
+	}
+
+	if !slices.Contains(managerIDs, int32(managerID)) {
+		return staff.ErrManagerUnavailable
+	}
+
+	target, err := queries.LockStaffAccount(ctx, int32(accountID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.ErrStaffAccountNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock staff account %d: %w", accountID, err)
+	}
+
+	if target.Role == string(staff.RoleManager) && target.Status == string(staff.AccountStatusActive) && len(managerIDs) == 1 {
+		return staff.ErrLastActiveManager
+	}
+
+	if _, err := queries.DisableStaffAccount(ctx, int32(accountID)); err != nil {
+		return fmt.Errorf("disable staff account %d: %w", accountID, err)
+	}
+	if err := queries.RevokeStaffAccountSessions(ctx, int32(accountID)); err != nil {
+		return fmt.Errorf("revoke sessions for staff account %d: %w", accountID, err)
+	}
+
+	if err := queries.CancelStaffInvitationEmailJobs(ctx, int32(accountID)); err != nil {
+		return fmt.Errorf("cancel invitation emails for staff account %d: %w", accountID, err)
+	}
+	if err := queries.RevokeOpenStaffInvitations(ctx, int32(accountID)); err != nil {
+		return fmt.Errorf("revoke invitations for staff account %d: %w", accountID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit staff account deactivation: %w", err)
+	}
 	return nil
 }
