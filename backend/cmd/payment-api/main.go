@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jjmbeba/lumora/backend/internal/config"
 	"github.com/jjmbeba/lumora/backend/internal/payment/postgres"
 	"github.com/jjmbeba/lumora/backend/internal/payment/webhook"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {

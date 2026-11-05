@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jjmbeba/lumora/backend/internal/staff"
 	staffpostgres "github.com/jjmbeba/lumora/backend/internal/staff/postgres"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func TestBootstrapOwnerAndMFAAuthentication(t *testing.T) {

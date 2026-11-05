@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jjmbeba/lumora/backend/internal/booking"
 	"github.com/jjmbeba/lumora/backend/internal/checkout"
 	"github.com/jjmbeba/lumora/backend/internal/payment"
 	paymentpostgres "github.com/jjmbeba/lumora/backend/internal/payment/postgres"
 	"github.com/jjmbeba/lumora/backend/internal/ticket"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 var bookingIntegrationID atomic.Int64

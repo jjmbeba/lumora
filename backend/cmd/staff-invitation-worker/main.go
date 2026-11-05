@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jjmbeba/lumora/backend/internal/config"
 	"github.com/jjmbeba/lumora/backend/internal/email/resend"
 	"github.com/jjmbeba/lumora/backend/internal/staff"
 	staffpostgres "github.com/jjmbeba/lumora/backend/internal/staff/postgres"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 const maxInvitationEmailAttempts = 10

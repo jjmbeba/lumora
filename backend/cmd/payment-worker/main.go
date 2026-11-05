@@ -10,12 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jjmbeba/lumora/backend/internal/config"
 	"github.com/jjmbeba/lumora/backend/internal/payment"
 	"github.com/jjmbeba/lumora/backend/internal/payment/paystack"
 	"github.com/jjmbeba/lumora/backend/internal/payment/postgres"
 	"github.com/jjmbeba/lumora/backend/internal/ticket"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {

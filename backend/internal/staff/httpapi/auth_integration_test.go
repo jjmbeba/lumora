@@ -17,10 +17,10 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jjmbeba/lumora/backend/internal/staff"
 	staffhttpapi "github.com/jjmbeba/lumora/backend/internal/staff/httpapi"
 	staffpostgres "github.com/jjmbeba/lumora/backend/internal/staff/postgres"
-	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 const (

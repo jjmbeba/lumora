@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jjmbeba/lumora/backend/internal/staff"
 	"github.com/jjmbeba/lumora/backend/internal/staff/postgres/dbgen"
-	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Store struct{ db *sql.DB }
