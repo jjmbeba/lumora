@@ -55,4 +55,7 @@ type Store interface {
 	CompleteLoginChallenge(context.Context, []byte, []byte, []byte, time.Time) (Identity, error)
 	AuthenticateSession(context.Context, []byte) (Identity, time.Time, error)
 	RevokeSession(context.Context, []byte) error
+	LoadInvitation(context.Context, []byte) (Account, error)
+	StartInvitationEnrollment(context.Context, []byte, []byte, int16, []byte, time.Time) error
+	CompleteInvitationEnrollment(context.Context, []byte, []byte, string, [][]byte) (Account, error)
 }

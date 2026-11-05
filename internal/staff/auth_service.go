@@ -162,6 +162,104 @@ func (s *AuthService) CompleteLogin(ctx context.Context, challengeToken, code st
 	return identity, Session{Token: token, ExpiresAt: expiresAt}, nil
 }
 
+func (s *AuthService) StartInvitationEnrollment(ctx context.Context, invitationToken string) (InvitationEnrollmentChallenge, error) {
+	invitationToken = strings.TrimSpace(invitationToken)
+	if !isOpaqueToken(invitationToken) {
+		return InvitationEnrollmentChallenge{}, ErrInvalidStaffInvitation
+	}
+
+	secret, err := NewTOTPSecret()
+	if err != nil {
+		return InvitationEnrollmentChallenge{}, err
+	}
+
+	invitation, err := s.store.LoadInvitation(ctx, digestToken(invitationToken))
+	if err != nil {
+		if errors.Is(err, ErrAccountUnavailable) {
+			return InvitationEnrollmentChallenge{}, ErrInvalidStaffInvitation
+		}
+		return InvitationEnrollmentChallenge{}, err
+	}
+
+	secretCiphertext, keyVersion, err := s.cipher.Encrypt(invitation.Email, secret)
+	if err != nil {
+		return InvitationEnrollmentChallenge{}, fmt.Errorf("encrypt staff enrollment TOTP secret: %w", err)
+	}
+
+	challengeToken, challengeDigest, err := newOpaqueToken()
+	if err != nil {
+		return InvitationEnrollmentChallenge{}, err
+	}
+
+	expiresAt := time.Now().UTC().Add(loginChallengeLifetime)
+	if err := s.store.StartInvitationEnrollment(
+		ctx,
+		digestToken(invitationToken),
+		secretCiphertext,
+		keyVersion,
+		challengeDigest,
+		expiresAt,
+	); err != nil {
+		return InvitationEnrollmentChallenge{}, err
+	}
+
+	return InvitationEnrollmentChallenge{Token: challengeToken, TOTPSecret: secret, ExpiresAt: expiresAt}, nil
+}
+
+func (s *AuthService) CompleteInvitationEnrollment(ctx context.Context, invitationToken, challengeToken, password, code string) (InvitationEnrollmentResult, error) {
+	invitationToken = strings.TrimSpace(invitationToken)
+	challengeToken = strings.TrimSpace(challengeToken)
+	if !isOpaqueToken(invitationToken) || !isOpaqueToken(challengeToken) {
+		return InvitationEnrollmentResult{}, ErrInvalidStaffEnrollment
+	}
+
+	challengeDigest := digestToken(challengeToken)
+	challenge, err := s.store.LoadLoginChallenge(ctx, challengeDigest)
+	if err != nil {
+		if errors.Is(err, ErrInvalidChallenge) {
+			return InvitationEnrollmentResult{}, ErrInvalidStaffEnrollment
+		}
+		return InvitationEnrollmentResult{}, err
+	}
+
+	if challenge.Purpose != ChallengePurposeEnrollment || challenge.Account.Status != AccountStatusInvited {
+		return InvitationEnrollmentResult{}, ErrInvalidStaffEnrollment
+	}
+
+	secret, err := s.cipher.Decrypt(challenge.Account.Email, challenge.MFAKeyVersion, challenge.MFASecretCiphertext)
+	if err != nil {
+		return InvitationEnrollmentResult{}, fmt.Errorf("decrypt staff enrollment TOTP secret: %w", err)
+	}
+
+	if !VerifyTOTP(secret, code, time.Now()) {
+		if err := s.store.RecordLoginChallengeFailure(ctx, challengeDigest); err != nil {
+			if errors.Is(err, ErrInvalidChallenge) {
+				return InvitationEnrollmentResult{}, ErrInvalidStaffEnrollment
+			}
+			return InvitationEnrollmentResult{}, fmt.Errorf("record invalid staff enrollment MFA attempt: %w", err)
+		}
+		return InvitationEnrollmentResult{}, ErrInvalidMFA
+	}
+
+	passwordHash, err := HashPassword(password)
+	if err != nil {
+		return InvitationEnrollmentResult{}, err
+	}
+
+	recoveryCodes, recoveryDigests, err := NewRecoveryCodes()
+	if err != nil {
+		return InvitationEnrollmentResult{}, err
+	}
+
+	account, err := s.store.CompleteInvitationEnrollment(ctx, digestToken(invitationToken), challengeDigest, passwordHash, recoveryDigests)
+	if err != nil {
+		return InvitationEnrollmentResult{}, err
+	}
+
+	account.MFAEnabled = true
+	return InvitationEnrollmentResult{Account: account, RecoveryCodes: recoveryCodes}, nil
+}
+
 func (s *AuthService) AuthenticateSession(ctx context.Context, token string) (Identity, time.Time, error) {
 	if !isOpaqueToken(token) {
 		return Identity{}, time.Time{}, ErrInvalidSession

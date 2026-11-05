@@ -9,7 +9,7 @@ The accepted staff-authentication decisions are in [decisions.md](decisions.md).
 3. The response sets the opaque session token in an `HttpOnly`, `Secure`, `SameSite=Strict` cookie. PostgreSQL stores only its SHA-256 digest. Protected handlers use `AuthHandler.RequireSession`, which checks account status, absolute expiry, and the 15-minute idle limit on each request.
 4. `POST /staff/auth/logout` revokes the session and clears the cookie.
 
-Manager-only handlers must use `AuthHandler.RequireRole(staff.RoleManager, handler)`. It authenticates the session first, then returns `403 Forbidden` when the authenticated account is not a manager. Do not authorize from a client-supplied role or trust a role copied into a session cookie.
+Cookie-authenticated mutations require the exact configured `Origin` and `X-Staff-Request: 1`. Set `STAFF_FRONTEND_ORIGIN` to the frontend origin (scheme and host only). This check applies to logout and manager mutations. Manager-only handlers must use `AuthHandler.RequireRole(staff.RoleManager, handler)`. It authenticates the session first, then returns `403 Forbidden` when the authenticated account is not a manager. Do not authorize from a client-supplied role or trust a role copied into a session cookie.
 
 `POST /staff/accounts/{id}/deactivation` is manager-only. It disables the account and revokes its sessions and any open invitation in one transaction. It returns `409 Conflict` when the target is the last active manager.
 
@@ -26,6 +26,26 @@ STAFF_MFA_KEY_1=<standard-base64-encoded 32-byte key>
 ```
 
 Keep the key material outside source control and PostgreSQL. Retain old key versions while stored TOTP secrets still use them. Generate keys with a cryptographically secure random source; do not reuse the ticket credential or booking verification keys.
+
+The booking API and invitation worker also require a separate versioned key ring for encrypted invitation tokens:
+
+```text
+STAFF_INVITATION_CURRENT_KEY_VERSION=1
+STAFF_INVITATION_KEY_VERSIONS=1
+STAFF_INVITATION_KEY_1=<standard-base64-encoded 32-byte key>
+```
+
+The booking API uses this ring when creating invitations; run `go run ./cmd/staff-invitation-worker` with the same retained versions and `STAFF_INVITATION_SETUP_URL` set to the frontend's account-setup page. The API also requires `STAFF_FRONTEND_ORIGIN`, such as `https://staff.example.com`. The invitation worker requires `DATABASE_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STAFF_INVITATION_SETUP_URL`, and the invitation key-ring variables above. The setup URL must be HTTPS, except for loopback development URLs. The worker clears invitation ciphertext after successful delivery, consumption, revocation, or expiry. Keep old keys while any retryable invitation email still has encrypted token data.
+
+## Manager invitations
+
+`POST /staff/accounts` accepts `{ "email", "display_name", "role" }` and is restricted to managers. It creates the `INVITED` account, stores a digest and encrypted retry copy of its random setup token, and queues a `STAFF_INVITATION` email in one transaction. The endpoint returns `202 Accepted`; it does not claim the email was delivered. The browser must send the configured `Origin` and `X-Staff-Request: 1` on this and other cookie-authenticated mutations.
+
+`POST /staff/accounts/{id}/invitation` resends setup to an invited account. It revokes the previous open invitation and cancels queued delivery before inserting a replacement invitation and email job in one transaction. A previously delivered link stops working as soon as this transaction commits.
+
+The link expires after 24 hours. The frontend starts setup with `POST /staff/invitations/setup/start` and the invitation token, then completes it with `POST /staff/invitations/setup/complete`, sending the token, MFA challenge, six-digit TOTP code, and chosen password. The account becomes `ACTIVE` only after the password and TOTP verify together. The completion response returns ten recovery codes once; the new staff member then signs in normally. Since the link token is a bearer credential, the setup page should avoid third-party resources, use a restrictive referrer policy, and remove the token from the address bar after reading it.
+
+Deactivation uses `POST /staff/accounts/{id}/deactivation`. It revokes sessions and open invitations transactionally, and refuses to disable the last active manager.
 
 ## One-time first-owner bootstrap
 
@@ -50,7 +70,21 @@ STAFF_HTTP_TEST_DATABASE_URL="$DATABASE_URL" go test ./internal/staff/httpapi -r
 
 The test creates and removes its own fixture account. It covers password login, MFA challenge completion, secure session-cookie authentication, logout, and rejection of the revoked session.
 
+The PostgreSQL invitation tests use a separate database because they create a temporary trigger to force an outbox failure and verify transaction rollback. With the repository's local PostgreSQL container running, create the disposable database and apply all Goose migrations once:
+
+```sh
+docker compose up -d db
+docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE staff_invitation_test'
+DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5433/staff_invitation_test?sslmode=disable' \
+  go run ./cmd/migrate up
+
+STAFF_INVITATION_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5433/staff_invitation_test?sslmode=disable" \
+  go test ./internal/staff/postgres -run '^(TestCreateAndResendInvitationInvalidatePreviousLink|TestInvitationEnrollmentActivatesAccountOnce|TestExpiredInvitationCannotStartEnrollment|TestCreateInvitationRollsBackWhenEmailJobInsertFails)$' -v
+```
+
+The database name must include `test`; the tests clean their account fixtures and remove the temporary trigger/function after the rollback case. CI creates and migrates this database independently from the auth HTTP integration database.
+
 ## Current implementation boundary
 
-The initial-owner bootstrap, password/MFA sign-in/session path, and manager account deactivation are implemented. Manager invitations, invitation acceptance/MFA enrollment, and a distributed login rate limit remain separate implementation work.
+The initial-owner bootstrap, password/MFA sign-in/session path, manager invitations and resend, invitation email delivery, invitation acceptance/MFA enrollment, CSRF checks for cookie-authenticated mutations, and manager account deactivation are implemented. A distributed login rate limit remains separate implementation work.
 

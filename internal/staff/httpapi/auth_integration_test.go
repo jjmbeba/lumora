@@ -94,7 +94,7 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 		t.Fatalf("create first owner fixture: %v", err)
 	}
 
-	handler, err := staffhttpapi.NewAuthHandler(service, true)
+	handler, err := staffhttpapi.NewAuthHandler(service, true, "https://staff.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +187,8 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 	logout := httptest.NewRecorder()
 	logoutRequest := httptest.NewRequest(http.MethodPost, "/staff/auth/logout", nil)
 	logoutRequest.AddCookie(sessionCookie)
+	logoutRequest.Header.Set("Origin", "https://staff.example.test")
+	logoutRequest.Header.Set("X-Staff-Request", "1")
 	mux.ServeHTTP(logout, logoutRequest)
 	if logout.Code != http.StatusNoContent {
 		t.Fatalf("logout status = %d, want %d", logout.Code, http.StatusNoContent)

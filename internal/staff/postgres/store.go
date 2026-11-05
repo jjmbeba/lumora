@@ -27,6 +27,359 @@ func NewStore(db *sql.DB) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+func (s *Store) CreateInvitation(ctx context.Context, managerID int, invitation staff.StaffInvitation) (staff.Account, error) {
+	if managerID <= 0 || int64(managerID) > 1<<31-1 || invitation.Email == "" || invitation.DisplayName == "" ||
+		(invitation.Role != staff.RoleManager && invitation.Role != staff.RoleScanner) ||
+		len(invitation.TokenDigest) != 32 || len(invitation.TokenCiphertext) == 0 || invitation.TokenKeyVersion <= 0 ||
+		!invitation.ExpiresAt.After(time.Now()) {
+		return staff.Account{}, staff.ErrInvalidStaffInvitation
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("begin staff invitation transaction: %w", err)
+	}
+
+	defer tx.Rollback()
+
+	queries := dbgen.New(tx)
+	managerIDs, err := queries.LockActiveStaffManagers(ctx)
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("lock active staff managers: %w", err)
+	}
+
+	if !slices.Contains(managerIDs, int32(managerID)) {
+		return staff.Account{}, staff.ErrManagerUnavailable
+	}
+
+	account, err := queries.CreateInvitedStaffAccount(ctx, dbgen.CreateInvitedStaffAccountParams{
+		Email: invitation.Email, DisplayName: invitation.DisplayName,
+		Role: dbgen.StaffRole(invitation.Role), CreatedByStaffAccountID: sql.NullInt32{Int32: int32(managerID), Valid: true},
+	})
+
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "staff_accounts_email_unique" {
+			return staff.Account{}, staff.ErrStaffEmailAlreadyExists
+		}
+		return staff.Account{}, fmt.Errorf("create invited staff account: %w", err)
+	}
+
+	if err := createInvitationAndEmailJob(ctx, queries, account.ID, int32(managerID), invitation); err != nil {
+		return staff.Account{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return staff.Account{}, fmt.Errorf("commit staff invitation: %w", err)
+	}
+
+	return staff.Account{
+		ID: int(account.ID), Email: account.Email, DisplayName: account.DisplayName,
+		Role: staff.Role(account.Role), Status: staff.AccountStatus(account.Status),
+	}, nil
+}
+
+func (s *Store) LoadInvitedAccount(ctx context.Context, accountID int) (staff.Account, error) {
+	if accountID <= 0 || int64(accountID) > 1<<31-1 {
+		return staff.Account{}, staff.ErrInvalidAccountID
+	}
+
+	row, err := dbgen.New(s.db).LoadInvitedStaffAccount(ctx, int32(accountID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.Account{}, staff.ErrAccountUnavailable
+	}
+
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("load invited staff account: %w", err)
+	}
+
+	return staff.Account{ID: int(row.ID), Email: row.Email, DisplayName: row.DisplayName, Role: staff.Role(row.Role), Status: staff.AccountStatus(row.Status)}, nil
+}
+
+func (s *Store) ResendInvitation(ctx context.Context, managerID, accountID int, invitation staff.StaffInvitation) (staff.Account, error) {
+	if managerID <= 0 || accountID <= 0 || int64(managerID) > 1<<31-1 || int64(accountID) > 1<<31-1 ||
+		len(invitation.TokenDigest) != 32 || len(invitation.TokenCiphertext) == 0 || invitation.TokenKeyVersion <= 0 ||
+		!invitation.ExpiresAt.After(time.Now()) {
+		return staff.Account{}, staff.ErrInvalidStaffInvitation
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("begin staff invitation resend transaction: %w", err)
+	}
+
+	defer tx.Rollback()
+
+	queries := dbgen.New(tx)
+	managerIDs, err := queries.LockActiveStaffManagers(ctx)
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("lock active staff managers: %w", err)
+	}
+
+	if !slices.Contains(managerIDs, int32(managerID)) {
+		return staff.Account{}, staff.ErrManagerUnavailable
+	}
+
+	account, err := queries.LockInvitedStaffAccount(ctx, int32(accountID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.Account{}, staff.ErrStaffAccountNotFound
+	}
+
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("lock invited staff account %d: %w", accountID, err)
+	}
+
+	if err := queries.CancelStaffInvitationEmailJobs(ctx, int32(accountID)); err != nil {
+		return staff.Account{}, fmt.Errorf("cancel previous staff invitation email: %w", err)
+	}
+
+	if err := queries.RevokeOpenStaffInvitations(ctx, int32(accountID)); err != nil {
+		return staff.Account{}, fmt.Errorf("revoke previous staff invitation: %w", err)
+	}
+
+	if err := createInvitationAndEmailJob(ctx, queries, int32(accountID), int32(managerID), invitation); err != nil {
+		return staff.Account{}, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return staff.Account{}, fmt.Errorf("commit staff invitation resend: %w", err)
+	}
+
+	return staff.Account{ID: int(account.ID), Email: account.Email, DisplayName: account.DisplayName, Role: staff.Role(account.Role), Status: staff.AccountStatus(account.Status)}, nil
+}
+
+func createInvitationAndEmailJob(ctx context.Context, queries *dbgen.Queries, accountID, managerID int32, invitation staff.StaffInvitation) error {
+	invitationID, err := queries.CreateStaffInvitation(ctx, dbgen.CreateStaffInvitationParams{
+		StaffAccountID: accountID, TokenDigest: invitation.TokenDigest, TokenCiphertext: invitation.TokenCiphertext,
+		TokenKeyVersion: sql.NullInt16{Int16: invitation.TokenKeyVersion, Valid: true},
+		ExpiresAt:       invitation.ExpiresAt, CreatedByStaffAccountID: managerID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("create staff invitation: %w", err)
+	}
+
+	if err := queries.CreateStaffInvitationEmailJob(ctx, dbgen.CreateStaffInvitationEmailJobParams{
+		EventKey: fmt.Sprintf("staff-invitation:%d", invitationID), RecipientEmail: invitation.Email,
+		StaffInvitationID: sql.NullInt32{Int32: invitationID, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("queue staff invitation email: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) LoadInvitation(ctx context.Context, digest []byte) (staff.Account, error) {
+	if len(digest) != 32 {
+		return staff.Account{}, staff.ErrInvalidStaffInvitation
+	}
+
+	row, err := dbgen.New(s.db).LoadStaffInvitation(ctx, digest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.Account{}, staff.ErrAccountUnavailable
+	}
+
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("load staff invitation: %w", err)
+	}
+
+	return staff.Account{
+		ID: int(row.ID), Email: row.Email, DisplayName: row.DisplayName,
+		Role: staff.Role(row.Role), Status: staff.AccountStatus(row.Status),
+	}, nil
+}
+
+func (s *Store) StartInvitationEnrollment(ctx context.Context, invitationDigest, secretCiphertext []byte, keyVersion int16, challengeDigest []byte, expiresAt time.Time) error {
+	if len(invitationDigest) != 32 || len(secretCiphertext) == 0 || keyVersion <= 0 || len(challengeDigest) != 32 || !expiresAt.After(time.Now()) {
+		return staff.ErrInvalidStaffInvitation
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin staff invitation enrollment transaction: %w", err)
+	}
+
+	defer tx.Rollback()
+
+	queries := dbgen.New(tx)
+	loaded, err := queries.LoadStaffInvitation(ctx, invitationDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.ErrInvalidStaffInvitation
+	}
+
+	if err != nil {
+		return fmt.Errorf("load staff invitation for setup: %w", err)
+	}
+
+	account, err := queries.LockStaffAccount(ctx, loaded.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.ErrInvalidStaffInvitation
+	}
+
+	if err != nil {
+		return fmt.Errorf("lock invited staff account: %w", err)
+	}
+
+	if account.Status != string(staff.AccountStatusInvited) {
+		return staff.ErrInvalidStaffInvitation
+	}
+
+	invitation, err := queries.LockStaffInvitationForSetup(ctx, invitationDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.ErrInvalidStaffInvitation
+	}
+
+	if err != nil {
+		return fmt.Errorf("lock staff invitation for setup: %w", err)
+	}
+
+	if invitation.AccountStatus != string(staff.AccountStatusInvited) {
+		return staff.ErrInvalidStaffInvitation
+	}
+
+	if err := queries.ConsumePendingStaffEnrollmentChallenges(ctx, invitation.StaffAccountID); err != nil {
+		return fmt.Errorf("replace previous staff enrollment challenges: %w", err)
+	}
+
+	rows, err := queries.SetStaffInvitationMFASecret(ctx, dbgen.SetStaffInvitationMFASecretParams{
+		MfaSecretCiphertext: secretCiphertext,
+		MfaKeyVersion:       sql.NullInt16{Int16: keyVersion, Valid: true},
+		ID:                  invitation.StaffAccountID,
+	})
+
+	if err != nil {
+		return fmt.Errorf("save pending staff TOTP secret: %w", err)
+	}
+	if rows != 1 {
+		return staff.ErrInvalidStaffInvitation
+	}
+
+	if err := queries.CreateAuthChallenge(ctx, dbgen.CreateAuthChallengeParams{
+		StaffAccountID: invitation.StaffAccountID, TokenDigest: challengeDigest,
+		Purpose: string(staff.ChallengePurposeEnrollment), ExpiresAt: expiresAt,
+	}); err != nil {
+		return fmt.Errorf("create staff enrollment challenge: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit staff invitation enrollment start: %w", err)
+	}
+
+	return nil
+}
+
+func (s *Store) CompleteInvitationEnrollment(ctx context.Context, invitationDigest, challengeDigest []byte, passwordHash string, recoveryDigests [][]byte) (staff.Account, error) {
+	if len(invitationDigest) != 32 || len(challengeDigest) != 32 || passwordHash == "" || len(recoveryDigests) != 10 {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	for _, digest := range recoveryDigests {
+		if len(digest) != 32 {
+			return staff.Account{}, staff.ErrInvalidStaffEnrollment
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("begin complete staff enrollment transaction: %w", err)
+	}
+
+	defer tx.Rollback()
+
+	queries := dbgen.New(tx)
+	loaded, err := queries.LoadStaffInvitation(ctx, invitationDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("load staff invitation for enrollment: %w", err)
+	}
+
+	account, err := queries.LockStaffAccount(ctx, loaded.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("lock invited staff account for enrollment: %w", err)
+	}
+
+	if account.Status != string(staff.AccountStatusInvited) {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	if err := queries.CancelStaffInvitationEmailJobs(ctx, loaded.ID); err != nil {
+		return staff.Account{}, fmt.Errorf("cancel pending staff invitation emails: %w", err)
+	}
+
+	invitation, err := queries.LockStaffInvitationForSetup(ctx, invitationDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("lock staff invitation for enrollment completion: %w", err)
+	}
+
+	challenge, err := queries.LockAuthChallenge(ctx, challengeDigest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("lock staff enrollment challenge: %w", err)
+	}
+
+	if challenge.StaffAccountID != invitation.StaffAccountID || challenge.Purpose != string(staff.ChallengePurposeEnrollment) || challenge.AccountStatus != string(staff.AccountStatusInvited) {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	rows, err := queries.ConsumeAuthChallenge(ctx, challenge.ChallengeID)
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("consume staff enrollment challenge: %w", err)
+	}
+
+	if rows != 1 {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	rows, err = queries.ActivateStaffInvitationAccount(ctx, dbgen.ActivateStaffInvitationAccountParams{
+		PasswordHash: sql.NullString{String: passwordHash, Valid: true}, ID: invitation.StaffAccountID,
+	})
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("activate staff account after enrollment: %w", err)
+	}
+
+	if rows != 1 {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	for _, digest := range recoveryDigests {
+		if err := queries.InsertRecoveryCode(ctx, dbgen.InsertRecoveryCodeParams{StaffAccountID: invitation.StaffAccountID, CodeDigest: digest}); err != nil {
+			return staff.Account{}, fmt.Errorf("save staff recovery code: %w", err)
+		}
+	}
+
+	rows, err = queries.ConsumeStaffInvitation(ctx, invitation.InvitationID)
+	if err != nil {
+		return staff.Account{}, fmt.Errorf("consume staff invitation: %w", err)
+	}
+
+	if rows != 1 {
+		return staff.Account{}, staff.ErrInvalidStaffEnrollment
+	}
+
+	if err := tx.Commit(); err != nil {
+		return staff.Account{}, fmt.Errorf("commit staff invitation enrollment: %w", err)
+	}
+
+	return staff.Account{
+		ID: int(invitation.StaffAccountID), Email: challenge.Email,
+		DisplayName: challenge.DisplayName, Role: staff.Role(challenge.AccountRole),
+		Status: staff.AccountStatusActive, MFAEnabled: true,
+	}, nil
+}
+
 func (s *Store) BootstrapOwnerExists(ctx context.Context) (bool, error) {
 	exists, err := dbgen.New(s.db).BootstrapOwnerExists(ctx)
 	if err != nil {
@@ -136,12 +489,14 @@ func (s *Store) LoadLoginChallenge(ctx context.Context, digest []byte) (staff.Ch
 		return staff.ChallengeCredentials{}, fmt.Errorf("load MFA challenge: %w", err)
 	}
 
-	if row.AccountStatus != string(staff.AccountStatusActive) || !row.MfaKeyVersion.Valid || row.MfaKeyVersion.Int16 <= 0 || len(row.MfaSecretCiphertext) == 0 {
+	validSignIn := row.AccountStatus == string(staff.AccountStatusActive) && row.Purpose == string(staff.ChallengePurposeSignIn)
+	validEnrollment := row.AccountStatus == string(staff.AccountStatusInvited) && row.Purpose == string(staff.ChallengePurposeEnrollment)
+	if (!validSignIn && !validEnrollment) || !row.MfaKeyVersion.Valid || row.MfaKeyVersion.Int16 <= 0 || len(row.MfaSecretCiphertext) == 0 {
 		return staff.ChallengeCredentials{}, staff.ErrInvalidChallenge
 	}
 
 	return staff.ChallengeCredentials{
-		Account: staff.Account{ID: int(row.StaffAccountID), Email: row.Email, DisplayName: row.DisplayName, Role: staff.Role(row.AccountRole), Status: staff.AccountStatus(row.AccountStatus), MFAEnabled: true},
+		Account: staff.Account{ID: int(row.StaffAccountID), Email: row.Email, DisplayName: row.DisplayName, Role: staff.Role(row.AccountRole), Status: staff.AccountStatus(row.AccountStatus), MFAEnabled: validSignIn},
 		Purpose: staff.ChallengePurpose(row.Purpose), MFASecretCiphertext: append([]byte(nil), row.MfaSecretCiphertext...), MFAKeyVersion: row.MfaKeyVersion.Int16,
 	}, nil
 }

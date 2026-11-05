@@ -45,6 +45,10 @@ func runMain() error {
 	if listenAddr == "" {
 		listenAddr = ":8081"
 	}
+	staffFrontendOrigin, err := config.RequireEnv("STAFF_FRONTEND_ORIGIN")
+	if err != nil {
+		return err
+	}
 
 	resendApiKey, err := config.RequireEnv("RESEND_API_KEY")
 	if err != nil {
@@ -79,6 +83,15 @@ func runMain() error {
 	if err != nil {
 		return fmt.Errorf("configure staff MFA cipher: %w", err)
 	}
+	staffInvitationKeyring, err := config.StaffInvitationKeyringFromEnv()
+	if err != nil {
+		return err
+	}
+	defer clearStaffInvitationKeys(staffInvitationKeyring.Keys)
+	staffInvitationCipher, err := staffdomain.NewInvitationTokenCipher(staffInvitationKeyring.Keys, staffInvitationKeyring.CurrentVersion)
+	if err != nil {
+		return fmt.Errorf("configure staff invitation token cipher: %w", err)
+	}
 
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
@@ -88,10 +101,10 @@ func runMain() error {
 
 	defer stop()
 
-	return run(ctx, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr, credentialCipher, staffMFACipher)
+	return run(ctx, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr, staffFrontendOrigin, credentialCipher, staffMFACipher, staffInvitationCipher)
 }
 
-func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr string, credentialCipher *ticket.CredentialCipher, staffMFACipher *staffdomain.MFACipher) error {
+func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, listenAddr, staffFrontendOrigin string, credentialCipher *ticket.CredentialCipher, staffMFACipher *staffdomain.MFACipher, staffInvitationCipher *staffdomain.InvitationTokenCipher) error {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("open database pool: %w", err)
@@ -157,11 +170,11 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 	if err != nil {
 		return err
 	}
-	staffAuthHandler, err := staffhttpapi.NewAuthHandler(staffAuthService, true)
+	staffAuthHandler, err := staffhttpapi.NewAuthHandler(staffAuthService, true, staffFrontendOrigin)
 	if err != nil {
 		return err
 	}
-	staffManagementService, err := staffdomain.NewManagementService(staffStore)
+	staffManagementService, err := staffdomain.NewManagementService(staffStore, staffInvitationCipher)
 	if err != nil {
 		return err
 	}
@@ -245,6 +258,12 @@ func clearCredentialKeys(keys map[int16][]byte) {
 }
 
 func clearStaffMFAKeys(keys map[int16][]byte) {
+	for _, key := range keys {
+		clear(key)
+	}
+}
+
+func clearStaffInvitationKeys(keys map[int16][]byte) {
 	for _, key := range keys {
 		clear(key)
 	}

@@ -10,7 +10,6 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -31,7 +30,7 @@ const (
 // HashPassword derives a PBKDF2-HMAC-SHA-256 hash with a unique random salt.
 func HashPassword(password string) (string, error) {
 	if utf8.RuneCountInString(password) < 8 || len(password) > 1024 {
-		return "", errors.New("password must contain at least 8 characters and at most 1024 bytes")
+		return "", ErrInvalidPassword
 	}
 
 	salt := make([]byte, passwordSaltBytes)

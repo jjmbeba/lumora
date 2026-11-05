@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/booking"
+	"example.com/cinema-tickets-backend/internal/staff"
 	"example.com/cinema-tickets-backend/internal/ticket"
 	"github.com/resend/resend-go/v4"
 	"github.com/skip2/go-qrcode"
@@ -20,6 +21,7 @@ type ResendSender struct {
 }
 
 var _ booking.VerificationEmailSender = (*ResendSender)(nil)
+var _ staff.InvitationEmailSender = (*ResendSender)(nil)
 var _ ticket.TicketEmailSender = (*ResendSender)(nil)
 
 func NewResendSender(apiKey string, fromAddress string) (*ResendSender, error) {
@@ -40,8 +42,12 @@ func NewResendSender(apiKey string, fromAddress string) (*ResendSender, error) {
 }
 
 func (r *ResendSender) SendVerificationCode(ctx context.Context, email booking.VerificationCodeEmail) error {
-	if strings.TrimSpace(email.To) == "" || email.Code == "" || email.ExpiresIn <= 0 {
-		return errors.New("verification email recipient, code, and expiry are required")
+	recipient, err := r.validateRecipient(email.To)
+	if err != nil {
+		return fmt.Errorf("verification email: %w", err)
+	}
+	if email.Code == "" || email.ExpiresIn <= 0 {
+		return errors.New("verification email code and expiry are required")
 	}
 
 	expiry := formatExpiry(email.ExpiresIn)
@@ -57,7 +63,7 @@ func (r *ResendSender) SendVerificationCode(ctx context.Context, email booking.V
 	)
 	params := &resend.SendEmailRequest{
 		From:    r.fromAddress,
-		To:      []string{strings.TrimSpace(email.To)},
+		To:      []string{recipient},
 		Subject: "Your booking verification code",
 		Text:    textBody,
 		Html:    htmlBody,
@@ -71,8 +77,12 @@ func (r *ResendSender) SendVerificationCode(ctx context.Context, email booking.V
 }
 
 func (r *ResendSender) SendTicketEmail(ctx context.Context, email ticket.TicketEmail) error {
-	if strings.TrimSpace(email.To) == "" || strings.TrimSpace(email.BookingReference) == "" || strings.TrimSpace(email.IdempotencyKey) == "" || len(email.Tickets) == 0 {
-		return errors.New("ticket email recipient, booking reference, idempotency key, and tickets are required")
+	recipient, err := r.validateRecipient(email.To)
+	if err != nil {
+		return fmt.Errorf("ticket email: %w", err)
+	}
+	if strings.TrimSpace(email.BookingReference) == "" || strings.TrimSpace(email.IdempotencyKey) == "" || len(email.Tickets) == 0 {
+		return errors.New("ticket email booking reference, idempotency key, and tickets are required")
 	}
 
 	var htmlBody strings.Builder
@@ -106,7 +116,7 @@ func (r *ResendSender) SendTicketEmail(ctx context.Context, email ticket.TicketE
 
 	params := &resend.SendEmailRequest{
 		From:        r.fromAddress,
-		To:          []string{strings.TrimSpace(email.To)},
+		To:          []string{recipient},
 		Subject:     "Your cinema tickets",
 		Text:        textBody.String(),
 		Html:        htmlBody.String(),
@@ -118,6 +128,42 @@ func (r *ResendSender) SendTicketEmail(ctx context.Context, email ticket.TicketE
 	}
 
 	return nil
+}
+
+func (r *ResendSender) SendStaffInvitationEmail(ctx context.Context, email staff.StaffInvitationEmail) error {
+	recipient, err := r.validateRecipient(email.To)
+	if err != nil {
+		return fmt.Errorf("staff invitation email: %w", err)
+	}
+
+	if strings.TrimSpace(email.SetupURL) == "" || strings.TrimSpace(email.IdempotencyKey) == "" || !email.ExpiresAt.After(time.Now()) {
+		return errors.New("staff invitation email setup URL, idempotency key, and future expiry are required")
+	}
+
+	expiry := email.ExpiresAt.UTC().Format(time.RFC1123)
+	textBody := fmt.Sprintf("You have been invited to join the cinema ticketing staff. Set up your account using this single-use link: %s\n\nThis link expires at %s. If you were not expecting this invitation, you can ignore this email.", email.SetupURL, expiry)
+
+	htmlBody := fmt.Sprintf("<p>You have been invited to join the cinema ticketing staff.</p><p><a href=\"%s\">Set up your staff account</a></p><p>This single-use link expires at %s. If you were not expecting this invitation, you can ignore this email.</p>", html.EscapeString(email.SetupURL), html.EscapeString(expiry))
+	params := &resend.SendEmailRequest{
+		From: r.fromAddress, To: []string{recipient},
+		Subject: "Set up your cinema staff account", Text: textBody, Html: htmlBody,
+	}
+
+	options := &resend.SendEmailOptions{IdempotencyKey: email.IdempotencyKey}
+	if _, err := r.client.Emails.SendWithOptions(ctx, params, options); err != nil {
+		return fmt.Errorf("send staff invitation email with Resend: %w", err)
+	}
+
+	return nil
+}
+
+func (r *ResendSender) validateRecipient(address string) (string, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return "", errors.New("recipient email is required")
+	}
+
+	return address, nil
 }
 
 func formatExpiry(expiry time.Duration) string {

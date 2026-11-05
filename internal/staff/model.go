@@ -57,3 +57,14 @@ type Session struct {
 	Token     string
 	ExpiresAt time.Time
 }
+
+type InvitationEnrollmentChallenge struct {
+	Token      string
+	TOTPSecret string
+	ExpiresAt  time.Time
+}
+
+type InvitationEnrollmentResult struct {
+	Account       Account
+	RecoveryCodes []string
+}

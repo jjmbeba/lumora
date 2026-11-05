@@ -5,7 +5,10 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"example.com/cinema-tickets-backend/internal/staff"
@@ -17,8 +20,9 @@ const (
 )
 
 type AuthHandler struct {
-	service       *staff.AuthService
-	secureCookies bool
+	service        *staff.AuthService
+	secureCookies  bool
+	expectedOrigin string
 }
 
 type startLoginRequest struct {
@@ -29,6 +33,17 @@ type startLoginRequest struct {
 type completeLoginRequest struct {
 	Challenge string `json:"challenge"`
 	Code      string `json:"code"`
+}
+
+type startInvitationEnrollmentRequest struct {
+	InvitationToken string `json:"invitation_token"`
+}
+
+type completeInvitationEnrollmentRequest struct {
+	InvitationToken string `json:"invitation_token"`
+	Challenge       string `json:"challenge"`
+	Password        string `json:"password"`
+	Code            string `json:"code"`
 }
 
 type challengeResponse struct {
@@ -42,6 +57,17 @@ type loginResponse struct {
 	ExpiresAt time.Time        `json:"expires_at"`
 }
 
+type invitationEnrollmentChallengeResponse struct {
+	Challenge  string    `json:"challenge"`
+	TOTPSecret string    `json:"totp_secret"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+type invitationEnrollmentResponse struct {
+	Account       identityResponse `json:"account"`
+	RecoveryCodes []string         `json:"recovery_codes"`
+}
+
 type identityResponse struct {
 	ID          int    `json:"id"`
 	Email       string `json:"email"`
@@ -49,12 +75,16 @@ type identityResponse struct {
 	Role        string `json:"role"`
 }
 
-func NewAuthHandler(service *staff.AuthService, secureCookies bool) (*AuthHandler, error) {
+func NewAuthHandler(service *staff.AuthService, secureCookies bool, expectedOrigin string) (*AuthHandler, error) {
 	if service == nil {
 		return nil, errors.New("staff auth service is required")
 	}
+	origin, err := canonicalOrigin(expectedOrigin)
+	if err != nil {
+		return nil, errors.New("staff frontend origin must be an HTTPS origin (or loopback HTTP for development)")
+	}
 
-	return &AuthHandler{service: service, secureCookies: secureCookies}, nil
+	return &AuthHandler{service: service, secureCookies: secureCookies, expectedOrigin: origin}, nil
 }
 
 func (h *AuthHandler) StartLogin(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +148,68 @@ func (h *AuthHandler) CompleteLogin(w http.ResponseWriter, r *http.Request) {
 	writeAuthJSON(w, http.StatusOK, loginResponse{Account: identityResponse{
 		ID: identity.AccountID, Email: identity.Email, DisplayName: identity.DisplayName, Role: string(identity.Role),
 	}, ExpiresAt: session.ExpiresAt})
+}
+
+func (h *AuthHandler) StartInvitationEnrollment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request startInvitationEnrollmentRequest
+	if !decodeAuthRequest(w, r, &request) {
+		return
+	}
+
+	challenge, err := h.service.StartInvitationEnrollment(r.Context(), request.InvitationToken)
+	if errors.Is(err, staff.ErrInvalidStaffInvitation) {
+		http.Error(w, "invitation is invalid or expired", http.StatusBadRequest)
+		return
+	}
+
+	if err != nil {
+		http.Error(w, "unable to start staff account setup", http.StatusInternalServerError)
+		return
+	}
+
+	writeAuthJSON(w, http.StatusOK, invitationEnrollmentChallengeResponse{
+		Challenge: challenge.Token, TOTPSecret: challenge.TOTPSecret, ExpiresAt: challenge.ExpiresAt,
+	})
+}
+
+func (h *AuthHandler) CompleteInvitationEnrollment(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request completeInvitationEnrollmentRequest
+	if !decodeAuthRequest(w, r, &request) {
+		return
+	}
+
+	result, err := h.service.CompleteInvitationEnrollment(r.Context(), request.InvitationToken, request.Challenge, request.Password, request.Code)
+
+	switch {
+	case err == nil:
+		writeAuthJSON(w, http.StatusOK, invitationEnrollmentResponse{
+			Account: identityResponse{
+				ID: result.Account.ID, Email: result.Account.Email,
+				DisplayName: result.Account.DisplayName, Role: string(result.Account.Role),
+			},
+			RecoveryCodes: result.RecoveryCodes,
+		})
+	case errors.Is(err, staff.ErrInvalidPassword):
+		http.Error(w, "password must be at least 8 characters and at most 1024 bytes", http.StatusBadRequest)
+	case errors.Is(err, staff.ErrInvalidMFA):
+		http.Error(w, "authenticator code is invalid", http.StatusUnauthorized)
+	case errors.Is(err, staff.ErrInvalidStaffEnrollment):
+		http.Error(w, "invitation setup is invalid or expired", http.StatusBadRequest)
+	default:
+		http.Error(w, "unable to complete staff account setup", http.StatusInternalServerError)
+	}
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +279,40 @@ func (h *AuthHandler) RequireRole(required staff.Role, next http.Handler) http.H
 	}))
 }
 
+// RequireCSRF protects cookie-authenticated mutations with both an exact
+// frontend Origin check and a header that cross-origin HTML forms cannot set.
+func (h *AuthHandler) RequireCSRF(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin, err := canonicalOrigin(r.Header.Get("Origin"))
+		if err != nil || origin != h.expectedOrigin || r.Header.Get("X-Staff-Request") != "1" {
+			http.Error(w, "request origin is not allowed", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func canonicalOrigin(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u == nil || u.Scheme == "" || u.Host == "" || u.User != nil ||
+		u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", errors.New("invalid origin")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "https" && !(scheme == "http" && isLoopbackOriginHost(u.Hostname())) {
+		return "", errors.New("origin must use HTTPS except on loopback")
+	}
+	return scheme + "://" + strings.ToLower(u.Host), nil
+}
+
+func isLoopbackOriginHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	return net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback()
+}
+
 type identityContextKey struct{}
 
 func IdentityFromContext(r *http.Request) (staff.Identity, bool) {
@@ -233,7 +359,9 @@ func RegisterAuthRoutes(mux *http.ServeMux, handler *AuthHandler) error {
 
 	mux.HandleFunc("POST /staff/auth/login", handler.StartLogin)
 	mux.HandleFunc("POST /staff/auth/mfa", handler.CompleteLogin)
-	mux.HandleFunc("POST /staff/auth/logout", handler.Logout)
+	mux.Handle("POST /staff/auth/logout", handler.RequireCSRF(http.HandlerFunc(handler.Logout)))
+	mux.HandleFunc("POST /staff/invitations/setup/start", handler.StartInvitationEnrollment)
+	mux.HandleFunc("POST /staff/invitations/setup/complete", handler.CompleteInvitationEnrollment)
 
 	return nil
 }
