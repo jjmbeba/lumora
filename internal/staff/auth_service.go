@@ -28,6 +28,55 @@ func NewAuthService(store Store, cipher *MFACipher) (*AuthService, error) {
 	return &AuthService{store: store, cipher: cipher}, nil
 }
 
+// BootstrapFirstOwner creates the single active manager account. The caller
+// must enforce the external bootstrap gate before calling this method; this
+// method independently checks the database's one-owner invariant.
+func (s *AuthService) BootstrapFirstOwner(ctx context.Context, request BootstrapOwnerRequest) (BootstrapOwnerResult, error) {
+	exists, err := s.store.BootstrapOwnerExists(ctx)
+	if err != nil {
+		return BootstrapOwnerResult{}, fmt.Errorf("check first-owner bootstrap state: %w", err)
+	}
+	if exists {
+		return BootstrapOwnerResult{}, ErrBootstrapUnavailable
+	}
+
+	email := strings.ToLower(strings.TrimSpace(request.Email))
+	displayName := strings.TrimSpace(request.DisplayName)
+	if email == "" || displayName == "" {
+		return BootstrapOwnerResult{}, errors.New("owner email and display name are required")
+	}
+
+	if !VerifyTOTP(request.TOTPSecret, request.TOTPCode, time.Now()) {
+		return BootstrapOwnerResult{}, ErrInvalidMFA
+	}
+
+	passwordHash, err := HashPassword(request.Password)
+	if err != nil {
+		return BootstrapOwnerResult{}, fmt.Errorf("hash bootstrap owner password: %w", err)
+	}
+
+	secretCiphertext, keyVersion, err := s.cipher.Encrypt(email, request.TOTPSecret)
+	if err != nil {
+		return BootstrapOwnerResult{}, fmt.Errorf("encrypt bootstrap owner MFA secret: %w", err)
+	}
+
+	recoveryCodes, recoveryDigests, err := NewRecoveryCodes()
+	if err != nil {
+		return BootstrapOwnerResult{}, err
+	}
+
+	account, err := s.store.CreateBootstrapOwner(ctx, BootstrapOwner{
+		Email: email, DisplayName: displayName, PasswordHash: passwordHash,
+		MFASecretCiphertext: secretCiphertext, MFAKeyVersion: keyVersion,
+		RecoveryCodeDigests: recoveryDigests,
+	})
+	if err != nil {
+		return BootstrapOwnerResult{}, fmt.Errorf("persist bootstrap owner: %w", err)
+	}
+
+	return BootstrapOwnerResult{Account: account, RecoveryCodes: recoveryCodes}, nil
+}
+
 // StartLogin validates the password and returns a short-lived MFA challenge.
 // The challenge is not a staff session and must not authorize staff actions.
 func (s *AuthService) StartLogin(ctx context.Context, email, password string) (LoginChallenge, error) {

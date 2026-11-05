@@ -1,5 +1,7 @@
 -- +goose Up
 
+CREATE UNIQUE INDEX staff_accounts_email_unique ON staff_accounts (email);
+
 ALTER TABLE staff_accounts
   ADD COLUMN mfa_secret_ciphertext bytea,
   ADD COLUMN mfa_key_version smallint,
@@ -60,6 +62,7 @@ COMMENT ON TABLE staff_auth_challenges IS
 
 DROP TABLE staff_auth_challenges;
 DROP TABLE staff_recovery_codes;
+DROP INDEX staff_accounts_email_unique;
 ALTER TABLE staff_accounts
   DROP CONSTRAINT staff_active_account_requires_mfa,
   DROP CONSTRAINT staff_accounts_mfa_enabled_has_secret,

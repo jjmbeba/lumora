@@ -25,6 +25,19 @@ type BootstrapOwner struct {
 	RecoveryCodeDigests [][]byte
 }
 
+type BootstrapOwnerRequest struct {
+	Email       string
+	DisplayName string
+	Password    string
+	TOTPSecret  string
+	TOTPCode    string
+}
+
+type BootstrapOwnerResult struct {
+	Account       Account
+	RecoveryCodes []string
+}
+
 type ChallengeCredentials struct {
 	Account             Account
 	Purpose             ChallengePurpose
@@ -33,6 +46,7 @@ type ChallengeCredentials struct {
 }
 
 type Store interface {
+	BootstrapOwnerExists(context.Context) (bool, error)
 	CreateBootstrapOwner(context.Context, BootstrapOwner) (Account, error)
 	FindLoginCredentials(context.Context, string) (LoginCredentials, error)
 	CreateLoginChallenge(context.Context, int, ChallengePurpose, []byte, time.Time) error

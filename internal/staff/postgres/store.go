@@ -10,6 +10,7 @@ import (
 
 	"example.com/cinema-tickets-backend/internal/staff"
 	"example.com/cinema-tickets-backend/internal/staff/postgres/dbgen"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Store struct{ db *sql.DB }
@@ -22,6 +23,15 @@ func NewStore(db *sql.DB) (*Store, error) {
 	}
 
 	return &Store{db: db}, nil
+}
+
+func (s *Store) BootstrapOwnerExists(ctx context.Context) (bool, error) {
+	exists, err := dbgen.New(s.db).BootstrapOwnerExists(ctx)
+	if err != nil {
+		return false, fmt.Errorf("check bootstrap manager: %w", err)
+	}
+
+	return exists, nil
 }
 
 func (s *Store) CreateBootstrapOwner(ctx context.Context, owner staff.BootstrapOwner) (staff.Account, error) {
@@ -46,6 +56,10 @@ func (s *Store) CreateBootstrapOwner(ctx context.Context, owner staff.BootstrapO
 		MfaKeyVersion:       sql.NullInt16{Int16: owner.MFAKeyVersion, Valid: true},
 	})
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "staff_accounts_one_bootstrap_owner" {
+			return staff.Account{}, staff.ErrBootstrapUnavailable
+		}
 		return staff.Account{}, fmt.Errorf("create bootstrap manager: %w", err)
 	}
 

@@ -7,6 +7,7 @@ require (
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/resend/resend-go/v4 v4.9.1
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	golang.org/x/term v0.47.0
 )
 
 require (
@@ -18,5 +19,6 @@ require (
 	github.com/sethvargo/go-retry v0.4.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )

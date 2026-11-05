@@ -57,8 +57,8 @@ func TestEmbeddedMigrationsApplyAndReportStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply embedded migrations: %v", err)
 	}
-	if len(results) != 7 {
-		t.Fatalf("migrations applied = %d, want 7", len(results))
+	if len(results) != 8 {
+		t.Fatalf("migrations applied = %d, want 8", len(results))
 	}
 	results, err = provider.Up(ctx)
 	if err != nil {
@@ -71,8 +71,8 @@ func TestEmbeddedMigrationsApplyAndReportStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read migration status: %v", err)
 	}
-	if len(statuses) != 7 {
-		t.Fatalf("migration statuses = %d, want 7", len(statuses))
+	if len(statuses) != 8 {
+		t.Fatalf("migration statuses = %d, want 8", len(statuses))
 	}
 	for _, status := range statuses {
 		if status.State != goose.StateApplied {

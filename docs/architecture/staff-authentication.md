@@ -23,7 +23,20 @@ STAFF_MFA_KEY_1=<standard-base64-encoded 32-byte key>
 
 Keep the key material outside source control and PostgreSQL. Retain old key versions while stored TOTP secrets still use them. Generate keys with a cryptographically secure random source; do not reuse the ticket credential or booking verification keys.
 
+## One-time first-owner bootstrap
+
+Apply Goose migrations first, then run the local command:
+
+```sh
+go run ./cmd/migrate up
+go run ./cmd/staff-bootstrap
+```
+
+The command requires `DATABASE_URL`, `STAFF_BOOTSTRAP_SECRET` (at least 32 bytes), `STAFF_BOOTSTRAP_EMAIL`, `STAFF_BOOTSTRAP_DISPLAY_NAME`, `STAFF_BOOTSTRAP_PASSWORD`, and the MFA key-ring variables above. It prompts for the bootstrap secret without echoing it and compares it with the configured value before revealing the TOTP setup key. The secret is not stored in PostgreSQL or passed in process arguments. Run the command only from a trusted administrative shell. The database's unique email index and one-bootstrap-owner partial unique index are the final guards against duplicates and concurrent/repeated creation.
+
+The command prints an `otpauth://` setup URI and its Base32 secret, then waits for a current six-digit code. It creates the manager only after the code verifies. On success it prints ten recovery codes once; save them securely. The database stores their SHA-256 digests, not the codes.
+
 ## Current implementation boundary
 
-The sign-in/session path is wired into `cmd/booking-api`. Account bootstrap, authenticator enrollment, manager invitations/deactivation, role-protected staff operations, and a distributed login rate limit remain separate implementation work. Until bootstrap/enrollment is implemented, the sign-in routes have no supported path to create the first usable staff account.
+The initial-owner bootstrap and password/MFA sign-in/session path are implemented. Manager invitations/deactivation, role-protected staff operations, and a distributed login rate limit remain separate implementation work.
 

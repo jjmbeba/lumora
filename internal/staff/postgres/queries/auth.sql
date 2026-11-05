@@ -10,6 +10,11 @@ VALUES (
 )
 RETURNING id, email, display_name, role::text AS role, status::text AS status;
 
+-- name: BootstrapOwnerExists :one
+SELECT EXISTS (
+    SELECT 1 FROM staff_accounts WHERE is_bootstrap_owner
+);
+
 -- name: FindLoginCredentials :one
 SELECT id, email, display_name, role::text AS role, status::text AS status,
        password_hash, mfa_secret_ciphertext, mfa_key_version,

@@ -46,6 +46,19 @@ func (q *Queries) AuthenticateStaffSession(ctx context.Context, tokenDigest []by
 	return i, err
 }
 
+const bootstrapOwnerExists = `-- name: BootstrapOwnerExists :one
+SELECT EXISTS (
+    SELECT 1 FROM staff_accounts WHERE is_bootstrap_owner
+)
+`
+
+func (q *Queries) BootstrapOwnerExists(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, bootstrapOwnerExists)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const consumeAuthChallenge = `-- name: ConsumeAuthChallenge :execrows
 UPDATE staff_auth_challenges
 SET consumed_at = clock_timestamp()
