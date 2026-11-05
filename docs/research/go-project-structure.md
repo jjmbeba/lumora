@@ -1,8 +1,8 @@
 # Go project structure for the cinema backend
 
-**Recommendation:** start with one Go module at the repository root, one API command, and a separate payment worker command. Keep application packages under `internal/`, organize behavior around the cinema’s domain, and keep PostgreSQL migrations as SQL files in a root `migrations/` directory. This is a proposed starting point, not a layout mandated by Go.
+**Recommendation:** start with one Go module at the repository root, one API command, and a separate payment worker command. Keep application packages under `backend/internal/`, organize behavior around the cinema’s domain, and keep PostgreSQL migrations as SQL files in a root `backend/migrations/` directory. This is a proposed starting point, not a layout mandated by Go.
 
-Go’s official server-project guidance recommends `cmd/` for commands and `internal/` for server implementation packages; the `internal` rule prevents imports from outside the allowed parent tree. Go also explicitly recognizes that server layouts vary with protocols, deployment, and non-Go assets. ([Organizing a Go module](https://go.dev/doc/modules/layout))
+Go’s official server-project guidance recommends `cmd/` for commands and `backend/internal/` for server implementation packages; the `internal` rule prevents imports from outside the allowed parent tree. Go also explicitly recognizes that server layouts vary with protocols, deployment, and non-Go assets. ([Organizing a Go module](https://go.dev/doc/modules/layout))
 
 ## Proposed initial tree
 
@@ -30,7 +30,7 @@ migrations/
 docs/
 ```
 
-This is intentionally a modest modular monolith: the API and worker are separate processes/commands, but share one module, one database, and internal packages. The payment worker is justified by the durable initialization queue and lease recovery already in the domain context; it should reuse payment behavior rather than duplicate payment rules. Keep cross-package wiring in `internal/app` so feature packages do not import the command binaries or one another in cycles.
+This is intentionally a modest modular monolith: the API and worker are separate processes/commands, but share one module, one database, and internal packages. The payment worker is justified by the durable initialization queue and lease recovery already in the domain context; it should reuse payment behavior rather than duplicate payment rules. Keep cross-package wiring in `backend/internal/app` so feature packages do not import the command binaries or one another in cycles.
 
 ## Package and dependency rules
 
@@ -43,7 +43,7 @@ This is intentionally a modest modular monolith: the API and worker are separate
 
 - Put focused package tests beside the code in `*_test.go` files and run them with `go test`; the standard Go test framework is package-oriented. Add database-backed integration tests only when they exercise PostgreSQL behavior that a unit test cannot establish, especially transaction/locking invariants. ([How to Write Go Code: Testing](https://go.dev/doc/code#Testing))
 - Keep `main.go` small: load and validate configuration, construct dependencies, start the server or worker, and coordinate shutdown. Treat the exact configuration mechanism (environment variables, flags, or files) as a product/deployment decision; Go’s layout guidance does not prescribe one.
-- Store ordered, reviewable `.sql` migration files under `migrations/`, outside `internal/` so operational tooling can locate them without importing application packages. Decide the migration runner and whether SQL is embedded later. Go’s `embed` package can include files at compile time, but it is a mechanism, not a migration policy. ([embed package](https://pkg.go.dev/embed))
+- Store ordered, reviewable `.sql` migration files under `backend/migrations/`, outside `backend/internal/` so operational tooling can locate them without importing application packages. Decide the migration runner and whether SQL is embedded later. Go’s `embed` package can include files at compile time, but it is a mechanism, not a migration policy. ([embed package](https://pkg.go.dev/embed))
 - Keep database transaction boundaries explicit in the persistence/application operation. Go’s `database/sql` documentation describes `sql.Tx` as the mechanism for grouping operations that must commit or roll back together; the cinema’s atomic seat claim and worker claim/reclaim rules should remain visible as transactions in their owning operations. ([Executing transactions](https://go.dev/doc/database/execute-transactions))
 
 ## What this proposal does not settle

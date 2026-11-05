@@ -11,8 +11,8 @@ Before coding, read these together:
 - `CONTEXT.md` for current product rules.
 - `docs/architecture/decisions.md` for idempotency, package boundaries, and transaction rules.
 - `docs/architecture/flows/booking-create-idempotency-flow.excalidraw` for booking replay and seat-conflict behavior.
-- `migrations/00001_core_schema.sql` and `go run ./cmd/migrate up` for the database constraints and setup.
-- `internal/payment/worker.go` and `internal/payment/postgres/store.go` for the existing payment worker contract and state transitions.
+- `backend/migrations/00001_core_schema.sql` and `cd backend && go run ./cmd/migrate up` for the database constraints and setup.
+- `backend/internal/payment/worker.go` and `backend/internal/payment/postgres/store.go` for the existing payment worker contract and state transitions.
 
 The important boundary is: PostgreSQL owns durable state and atomic seat ownership; Go validates and coordinates operations; Paystack network calls happen after database transactions have committed.
 
@@ -39,11 +39,11 @@ Do not accept prices, booking status, expiry, or payment status from the custome
 
 **Goal:** express the operation in Go without putting SQL details in the domain package.
 
-**Likely files:** create `internal/booking/model.go`, `internal/booking/store.go`, and `internal/booking/service.go`.
+**Likely files:** create `backend/internal/booking/model.go`, `backend/internal/booking/store.go`, and `backend/internal/booking/service.go`.
 
 Start with the smallest useful types: a booking request, a result returned to the caller, and errors for meaningful business outcomes such as unavailable seats or idempotency-key reuse with a different request. Keep exported fields Go-style (`ScreeningID`, `SeatIDs`, `HoldExpiresAt`); use integer minor currency units for money.
 
-Put a small `Store` interface in `internal/booking`, because the booking service consumes it. Its method should represent the booking operation the application needs, not expose generic SQL operations or transaction controls. The PostgreSQL package will implement it implicitly.
+Put a small `Store` interface in `backend/internal/booking`, because the booking service consumes it. Its method should represent the booking operation the application needs, not expose generic SQL operations or transaction controls. The PostgreSQL package will implement it implicitly.
 
 Keep the service focused: canonicalize/fingerprint the request and apply domain rules, then delegate the atomic persistence operation. Avoid building a generic repository framework or a package per type.
 
@@ -53,7 +53,7 @@ Keep the service focused: canonicalize/fingerprint the request and apply domain 
 
 **Goal:** ensure one booking either owns every requested seat or owns none.
 
-**Likely files:** create `internal/booking/postgres/store.go` and `internal/booking/postgres/store_integration_test.go`.
+**Likely files:** create `backend/internal/booking/postgres/store.go` and `backend/internal/booking/postgres/store_integration_test.go`.
 
 Implement the store operation as one short transaction. It must resolve the idempotency key, load authoritative screening-seat prices and the screening's single currency, create the booking and immutable price snapshots, and claim all seats. The primary key on `seat_claims(screening_id, seat_id)` is the final concurrency guard when two customers request the same seat. The schema requires every seat in a screening to use that screening currency, so the booking total has one well-defined currency.
 
@@ -72,7 +72,7 @@ Do not keep a transaction open after this operation. Do not call Paystack from t
 
 **Goal:** translate HTTP input/output while keeping booking rules in the service.
 
-**Implemented:** booking creation is exposed by `POST /bookings`. Email-verification contracts and service live in `internal/booking/email_verification.go`, `internal/booking/email_verification_store.go`, and `internal/booking/email_verification_service.go`; PostgreSQL persistence lives in `internal/booking/postgres/email_verification_store.go`, with schema in Goose migration `00006_booking_email_verification.sql`. Run `go run ./cmd/migrate up` before starting services. The Resend adapter is in `internal/email/resend/sender.go`. The booking API wires the store, sender, service, limiter, and routes in `cmd/booking-api/main.go`. The challenge and verification routes are `POST /bookings/{reference}/email-verification-challenges` and `POST /bookings/{reference}/email-verifications`. The challenge route returns the same generic `202 Accepted` response for unknown booking references, booking-level limits, and email-delivery failures. Configuration is read from `RESEND_API_KEY`, `EMAIL_FROM`, and `BOOKING_ACCESS_CODE_HMAC_KEY`; never commit their values. The email-sender interface stays narrow and booking-owned, without Resend SDK types.
+**Implemented:** booking creation is exposed by `POST /bookings`. Email-verification contracts and service live in `backend/internal/booking/email_verification.go`, `backend/internal/booking/email_verification_store.go`, and `backend/internal/booking/email_verification_service.go`; PostgreSQL persistence lives in `backend/internal/booking/postgres/email_verification_store.go`, with schema in Goose migration `00006_booking_email_verification.sql`. Run `cd backend && go run ./cmd/migrate up` before starting services. The Resend adapter is in `backend/internal/email/resend/sender.go`. The booking API wires the store, sender, service, limiter, and routes in `cmd/booking-api/main.go`. The challenge and verification routes are `POST /bookings/{reference}/email-verification-challenges` and `POST /bookings/{reference}/email-verifications`. The challenge route returns the same generic `202 Accepted` response for unknown booking references, booking-level limits, and email-delivery failures. Configuration is read from `RESEND_API_KEY`, `EMAIL_FROM`, and `BOOKING_ACCESS_CODE_HMAC_KEY`; never commit their values. The email-sender interface stays narrow and booking-owned, without Resend SDK types.
 
 The HTTP IP limiter is in-memory. It sweeps inactive IPs at most once every five minutes when requests arrive, resets on process restart, and does not share limits across API instances. Use shared enforcement before running multiple instances.
 
@@ -90,9 +90,9 @@ Use `POST /bookings/{reference}/email-verification-challenges` to request the co
 
 **Goal:** make a valid booking eligible for the existing worker without making a provider call in the API transaction.
 
-**Already implemented:** `internal/checkout/service.go` fingerprints the combined booking/payment-method request, commits/replays the booking through `CreateWithFingerprint`, then creates or replays the payment initialization. `internal/payment/postgres/initialization_store.go` persists the payment attempt and initialization transactionally. The payment store integration tests cover its idempotency, eligibility, and retry rules.
+**Already implemented:** `backend/internal/checkout/service.go` fingerprints the combined booking/payment-method request, commits/replays the booking through `CreateWithFingerprint`, then creates or replays the payment initialization. `backend/internal/payment/postgres/initialization_store.go` persists the payment attempt and initialization transactionally. The payment store integration tests cover its idempotency, eligibility, and retry rules.
 
-**Implemented files:** `internal/checkout/service.go` and `service_test.go` coordinate the two writes and cover fingerprinting, payment-method changes, and failures. `internal/booking/httpapi/create_booking_handler.go` accepts `payment_method` and calls the checkout service; `cmd/booking-api/main.go` wires `payment/postgres.NewInitializationStore(db)` without worker lease configuration. The PostgreSQL integration test in `internal/booking/postgres/store_integration_test.go` verifies recovery when booking creation commits but initialization creation fails before its transaction begins.
+**Implemented files:** `backend/internal/checkout/service.go` and `service_test.go` coordinate the two writes and cover fingerprinting, payment-method changes, and failures. `backend/internal/booking/httpapi/create_booking_handler.go` accepts `payment_method` and calls the checkout service; `cmd/booking-api/main.go` wires `payment/postgres.NewInitializationStore(db)` without worker lease configuration. The PostgreSQL integration test in `backend/internal/booking/postgres/store_integration_test.go` verifies recovery when booking creation commits but initialization creation fails before its transaction begins.
 
 The client starts booking and payment with one `POST /bookings` request containing `payment_method: "CARD"` or `"MPESA"` and an `Idempotency-Key` header. The response contains both the booking and its payment-initialization status. A newly created initialization is `QUEUED`; omit `authorization_url` until the worker has received one from Paystack. An application-level use case coordinates the operations: first commit the booking and its seat claims, then create or replay the durable payment initialization in a separate transaction. Do not put this orchestration in the HTTP handler, and do not combine it with the booking transaction. The worker remains responsible for contacting Paystack after the initialization is committed.
 
@@ -128,7 +128,7 @@ Do not make the request wait for the worker or synchronously call Paystack. The 
 
 **Goal:** remove the manual fixture from the happy path.
 
-**Likely files:** `cmd/payment-api/main.go`, possibly a small `internal/app` package if setup is now shared or unwieldy, plus focused integration tests and local run documentation.
+**Likely files:** `cmd/payment-api/main.go`, possibly a small `backend/internal/app` package if setup is now shared or unwieldy, plus focused integration tests and local run documentation.
 
 Wire the database store, service, handlers, and existing webhook handler explicitly. Keep the payment worker as its separate process. Start with a local API request that creates the booking and initialization, then observe the worker claim it and return a checkout URL. Complete a sandbox checkout and verify the database reaches `payment_initializations=PAID`, `payment_attempts=PAID`, and `bookings=BOOKED` while retaining the seat claim.
 

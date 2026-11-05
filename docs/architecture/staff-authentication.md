@@ -35,7 +35,7 @@ STAFF_INVITATION_KEY_VERSIONS=1
 STAFF_INVITATION_KEY_1=<standard-base64-encoded 32-byte key>
 ```
 
-The booking API uses this ring when creating invitations; run `go run ./cmd/staff-invitation-worker` with the same retained versions and `STAFF_INVITATION_SETUP_URL` set to the frontend's account-setup page. The API also requires `STAFF_FRONTEND_ORIGIN`, such as `https://staff.example.com`. The invitation worker requires `DATABASE_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STAFF_INVITATION_SETUP_URL`, and the invitation key-ring variables above. The setup URL must be HTTPS, except for loopback development URLs. The worker clears invitation ciphertext after successful delivery, consumption, revocation, or expiry. Keep old keys while any retryable invitation email still has encrypted token data.
+The booking API uses this ring when creating invitations; run `cd backend && go run ./cmd/staff-invitation-worker` with the same retained versions and `STAFF_INVITATION_SETUP_URL` set to the frontend's account-setup page. The API also requires `STAFF_FRONTEND_ORIGIN`, such as `https://staff.example.com`. The invitation worker requires `DATABASE_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STAFF_INVITATION_SETUP_URL`, and the invitation key-ring variables above. The setup URL must be HTTPS, except for loopback development URLs. The worker clears invitation ciphertext after successful delivery, consumption, revocation, or expiry. Keep old keys while any retryable invitation email still has encrypted token data.
 
 ## Manager invitations
 
@@ -54,8 +54,8 @@ Deactivation uses `POST /staff/accounts/{id}/deactivation`. It revokes sessions 
 Apply Goose migrations first, then run the local command:
 
 ```sh
-go run ./cmd/migrate up
-go run ./cmd/staff-bootstrap
+(cd backend && go run ./cmd/migrate up)
+(cd backend && go run ./cmd/staff-bootstrap)
 ```
 
 The command requires `DATABASE_URL`, `STAFF_BOOTSTRAP_SECRET` (at least 32 bytes), `STAFF_BOOTSTRAP_EMAIL`, `STAFF_BOOTSTRAP_DISPLAY_NAME`, `STAFF_BOOTSTRAP_PASSWORD`, and the MFA key-ring variables above. It prompts for the bootstrap secret without echoing it and compares it with the configured value before revealing the TOTP setup key. The secret is not stored in PostgreSQL or passed in process arguments. Run the command only from a trusted administrative shell. The database's unique email index and one-bootstrap-owner partial unique index are the final guards against duplicates and concurrent/repeated creation.
@@ -67,7 +67,7 @@ The command prints an `otpauth://` setup URI and its Base32 secret, then waits f
 The HTTP integration test uses a dedicated disposable PostgreSQL database. Apply the migrations to that database, then run:
 
 ```sh
-STAFF_HTTP_TEST_DATABASE_URL="$DATABASE_URL" go test ./internal/staff/httpapi -run '^TestAuthHTTPFlowPostgres$' -v
+STAFF_HTTP_TEST_DATABASE_URL="$DATABASE_URL"; (cd backend && go test ./internal/staff/httpapi -run '^TestAuthHTTPFlowPostgres$' -v)
 ```
 
 The test creates and removes its own fixture account. It covers password login, MFA challenge completion, secure session-cookie authentication, logout, and rejection of the revoked session.
@@ -78,10 +78,10 @@ The PostgreSQL invitation tests use a separate database because they create a te
 docker compose up -d db
 docker compose exec -T db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c 'CREATE DATABASE staff_invitation_test'
 DATABASE_URL='postgres://postgres:postgres@127.0.0.1:5433/staff_invitation_test?sslmode=disable' \
-  go run ./cmd/migrate up
+  (cd backend && go run ./cmd/migrate up)
 
 STAFF_INVITATION_TEST_DATABASE_URL="postgres://postgres:postgres@127.0.0.1:5433/staff_invitation_test?sslmode=disable" \
-  go test ./internal/staff/postgres -run '^(TestCreateAndResendInvitationInvalidatePreviousLink|TestInvitationEnrollmentActivatesAccountOnce|TestExpiredInvitationCannotStartEnrollment|TestCreateInvitationRollsBackWhenEmailJobInsertFails)$' -v
+  (cd backend && go test ./internal/staff/postgres -run '^(TestCreateAndResendInvitationInvalidatePreviousLink|TestInvitationEnrollmentActivatesAccountOnce|TestExpiredInvitationCannotStartEnrollment|TestCreateInvitationRollsBackWhenEmailJobInsertFails)$' -v)
 ```
 
 The database name must include `test`; the tests clean their account fixtures and remove the temporary trigger/function after the rollback case. CI creates and migrates this database independently from the auth HTTP integration database.
