@@ -43,6 +43,8 @@ Accepted decisions for the project. `CONTEXT.md` remains the concise resume guid
 - Create the first owner account through a one-time bootstrap path. Afterward, managers create individual staff accounts through a manager-only frontend flow; do not expose public self-registration.
 - Protect first-owner setup with a high-entropy secret configured outside the database, and disable the bootstrap path immediately after the first owner is created.
 - Authenticate staff with their individual email and password, then issue an expiring revocable session. Store passwords only as adaptive password hashes, never as plaintext. Do not reuse customer booking-access tokens for staff authentication.
+- Require authenticator-app TOTP for every staff account before issuing a full session. Provide 10 single-use recovery codes at MFA enrollment; persist only their digests and consume them atomically. Store TOTP secrets encrypted with a versioned key kept outside PostgreSQL. MFA sign-in/enrollment challenges are short-lived and never authorize ticket redemption.
+- The initial implementation contract and required environment key ring are tracked in [staff-authentication.md](staff-authentication.md); bootstrap/enrollment and manager operations remain implementation work.
 - Keep scanner sessions valid for at most 8 hours, with explicit logout and immediate revocation when an account is deactivated.
 - Expire a scanner session after 15 minutes of inactivity, even if its work-shift maximum has not elapsed.
 - Use two staff roles in v1: `MANAGER` can provision/deactivate staff and redeem tickets; `SCANNER` can redeem tickets only. The first owner account is a manager.
