@@ -132,11 +132,10 @@ export const StaffAccountsPage = () => {
   const renderDirectoryContent = () => {
     if (accountsQuery.isPending) {
       return (
-        <div
+        <output
           aria-busy="true"
           aria-label="Loading staff accounts"
-          className="border-border mt-6 overflow-x-auto rounded-xl border"
-          role="status"
+          className="border-border mt-6 block overflow-x-auto rounded-xl border"
         >
           <span className="sr-only">Loading staff accounts</span>
           <Table aria-hidden="true" className="min-w-155 border-collapse">
@@ -167,7 +166,7 @@ export const StaffAccountsPage = () => {
               ))}
             </TableBody>
           </Table>
-        </div>
+        </output>
       );
     }
 
@@ -258,11 +257,14 @@ export const StaffAccountsPage = () => {
                         Resend
                       </Button>
                     ) : null}
-                    {sessionQuery.data?.account.id === account.id ? (
+                    {sessionQuery.data?.account.id === account.id && (
                       <span className="text-muted-foreground px-2 text-xs">
                         You
                       </span>
-                    ) : account.status !== "DISABLED" && sessionQuery.data ? (
+                    )}
+                    {sessionQuery.data?.account.id !== account.id &&
+                    account.status !== "DISABLED" &&
+                    sessionQuery.data ? (
                       <Button
                         disabled={deactivateAccount.isPending}
                         onClick={() => setAccountToDeactivate(account)}
@@ -431,7 +433,9 @@ export const StaffAccountsPage = () => {
                 open={inviteOpen}
                 onOpenChange={(open) => {
                   setInviteOpen(open);
-                  if (!open) inviteForm.reset();
+                  if (!open) {
+                    inviteForm.reset();
+                  }
                 }}
               >
                 <DialogTrigger render={<Button variant="outline" />}>
@@ -579,7 +583,9 @@ export const StaffAccountsPage = () => {
       <Dialog
         open={accountToDeactivate !== null}
         onOpenChange={(open) => {
-          if (!open) setAccountToDeactivate(null);
+          if (!open) {
+            setAccountToDeactivate(null);
+          }
         }}
       >
         <DialogContent>
@@ -601,7 +607,9 @@ export const StaffAccountsPage = () => {
             <Button
               disabled={!accountToDeactivate || deactivateAccount.isPending}
               onClick={() => {
-                if (!accountToDeactivate) return;
+                if (!accountToDeactivate) {
+                  return;
+                }
                 deactivateAccount.mutate(accountToDeactivate.id, {
                   onSuccess: () => setAccountToDeactivate(null),
                 });

@@ -1,11 +1,11 @@
 import { Link } from "@tanstack/react-router";
 import {
-    ArrowLeft,
-    Clapperboard,
-    Clock3,
-    MapPin,
-    QrCode,
-    TicketCheck,
+  ArrowLeft,
+  Clapperboard,
+  Clock3,
+  MapPin,
+  QrCode,
+  TicketCheck,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -14,12 +14,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
-type EmailFrameProps = {
+interface EmailFrameProps {
   category: string;
   from: string;
   subject: string;
   children: ReactNode;
-};
+}
 
 const EmailFrame = ({ category, from, subject, children }: EmailFrameProps) => (
   <Card className="border-border overflow-hidden rounded-xl border p-0 shadow-none ring-0">

@@ -1,4 +1,4 @@
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { LogOut, UserRound } from "lucide-react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -32,7 +32,7 @@ const initials = (name: string) =>
 export const StaffHeader = ({ eyebrow, title, session }: StaffHeaderProps) => {
   const navigate = useNavigate();
   const logoutMutation = useLogoutStaffMutation();
-  const account = session.account;
+  const { account } = session;
 
   const signOut = async () => {
     try {
@@ -74,16 +74,14 @@ export const StaffHeader = ({ eyebrow, title, session }: StaffHeaderProps) => {
               </p>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() => void navigate({ to: "/staff/profile" })}
-            >
+            <DropdownMenuItem render={<Link to="/staff/profile" />}>
               <UserRound aria-hidden="true" className="size-4" />
               Profile
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               disabled={logoutMutation.isPending}
-              onClick={() => void signOut()}
+              onClick={signOut}
               className="text-destructive"
             >
               <LogOut aria-hidden="true" className="size-4" />

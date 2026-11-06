@@ -1,8 +1,9 @@
 import { useForm } from "@tanstack/react-form";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import * as v from "valibot";
+
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,7 +42,6 @@ const fieldErrorText = (errors: unknown[]) =>
   [...new Set(errors.map(String))].join(" ");
 
 export const StaffSetupPage = () => {
-  const navigate = useNavigate();
   const { token } = useSearch({ from: "/staff/setup" });
   const start = useStartStaffEnrollmentMutation();
   const complete = useCompleteStaffEnrollmentMutation();
@@ -85,9 +85,7 @@ export const StaffSetupPage = () => {
               </li>
             ))}
           </ul>
-          <Link to="/staff/login">
-            Continue to staff sign in
-          </Link>
+          <Link to="/staff/login">Continue to staff sign in</Link>
         </Card>
       </main>
     );

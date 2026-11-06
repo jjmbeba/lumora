@@ -22,7 +22,9 @@ export const StaffProfilePage = () => {
       sessionQuery.error instanceof ApiError &&
       sessionQuery.error.status === 401
     ) {
-      void navigate({ to: "/staff/login" });
+      navigate({ to: "/staff/login" }).catch(() =>
+        window.location.assign("/staff/login")
+      );
     }
   }, [navigate, sessionQuery.error]);
 
@@ -49,7 +51,7 @@ export const StaffProfilePage = () => {
           </CardHeader>
           <Button
             className="mt-5"
-            onClick={() => void sessionQuery.refetch()}
+            onClick={() => sessionQuery.refetch()}
             variant="outline"
           >
             Try again

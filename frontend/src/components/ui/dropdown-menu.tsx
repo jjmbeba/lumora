@@ -41,7 +41,7 @@ const DropdownMenuItem = ({
 }: MenuPrimitive.Item.Props) => (
   <MenuPrimitive.Item
     className={cn(
-      "focus:bg-accent focus:text-accent-foreground data-highlighted:bg-accent data-highlighted:text-accent-foreground flex min-h-9 items-center gap-2 rounded-lg px-2 text-sm outline-none select-none data-disabled:pointer-events-none data-disabled:opacity-50 cursor-pointer",
+      "focus:bg-accent focus:text-accent-foreground data-highlighted:bg-accent data-highlighted:text-accent-foreground flex min-h-9 cursor-pointer items-center gap-2 rounded-lg px-2 text-sm outline-none select-none data-disabled:pointer-events-none data-disabled:opacity-50",
       className
     )}
     {...props}

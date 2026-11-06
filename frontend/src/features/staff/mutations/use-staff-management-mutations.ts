@@ -51,10 +51,13 @@ export const useDeactivateStaffAccountMutation = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (accountID: number) =>
-      apiRequest<void>(`/api/v1/staff/accounts/${accountID}/deactivation`, {
-        method: "POST",
-        headers: staffRequestHeaders,
-      }),
+      apiRequest<undefined>(
+        `/api/v1/staff/accounts/${accountID}/deactivation`,
+        {
+          method: "POST",
+          headers: staffRequestHeaders,
+        }
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["staff", "accounts"] });
       toast.success("Staff account deactivated.");
