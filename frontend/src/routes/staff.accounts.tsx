@@ -1,20 +1,16 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-const StaffAccountsPage = () => (
-  <section className="mx-auto max-w-6xl px-6 py-10 sm:px-10">
-    <p className="text-muted-foreground text-sm font-medium tracking-[0.18em] uppercase">
-      Lumora · Team
-    </p>
-    <h1 className="mt-4 text-4xl font-semibold tracking-tight">
-      Staff accounts
-    </h1>
-    <p className="text-muted-foreground mt-3 max-w-xl">
-      The manager directory will connect to the staff API in the next
-      implementation step.
-    </p>
-  </section>
-);
+import { StaffAccountsPage } from "@/components/staff-accounts-page";
 
 export const Route = createFileRoute("/staff/accounts")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    page: Math.max(1, Math.trunc(Number(String(search.page ?? "1"))) || 1),
+    page_size: Math.min(
+      100,
+      Math.max(1, Math.trunc(Number(String(search.page_size ?? "20"))) || 20)
+    ),
+    search:
+      typeof search.search === "string" ? search.search.slice(0, 100) : "",
+  }),
   component: StaffAccountsPage,
 });

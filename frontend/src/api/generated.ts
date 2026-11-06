@@ -76,6 +76,26 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    StaffLoginChallenge: {
+      challenge: string;
+      /** @enum {string} */
+      purpose: "MFA_SIGN_IN";
+      /** Format: date-time */
+      expires_at: string;
+    };
+    StaffIdentity: {
+      id: number;
+      /** Format: email */
+      email: string;
+      display_name: string;
+      /** @enum {string} */
+      role: "MANAGER" | "SCANNER";
+    };
+    StaffLoginResult: {
+      account: components["schemas"]["StaffIdentity"];
+      /** Format: date-time */
+      expires_at: string;
+    };
     StaffAccount: {
       id: number;
       /** Format: email */
@@ -171,7 +191,9 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["StaffLoginChallenge"];
+        };
       };
       /** @description Invalid request */
       400: {
@@ -217,7 +239,9 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["StaffLoginResult"];
+        };
       };
       /** @description Invalid request */
       400: {

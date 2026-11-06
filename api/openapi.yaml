@@ -50,7 +50,12 @@ paths:
                 email: { type: string, format: email }
                 password: { type: string, format: password }
       responses:
-        '200': { description: MFA challenge created }
+        '200':
+          description: MFA challenge created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffLoginChallenge'
         '400': { description: Invalid request }
         '401': { description: Invalid credentials }
         '429': { description: Login rate limit reached }
@@ -69,7 +74,12 @@ paths:
                 challenge: { type: string }
                 code: { type: string }
       responses:
-        '200': { description: Session established; response includes Set-Cookie }
+        '200':
+          description: Session established; response includes Set-Cookie
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffLoginResult'
         '400': { description: Invalid request }
         '401': { description: Invalid or expired challenge }
   /staff/auth/logout:
@@ -89,6 +99,27 @@ components:
       in: cookie
       name: staff_session
   schemas:
+    StaffLoginChallenge:
+      type: object
+      required: [challenge, purpose, expires_at]
+      properties:
+        challenge: { type: string }
+        purpose: { type: string, enum: [MFA_SIGN_IN] }
+        expires_at: { type: string, format: date-time }
+    StaffIdentity:
+      type: object
+      required: [id, email, display_name, role]
+      properties:
+        id: { type: integer }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        role: { type: string, enum: [MANAGER, SCANNER] }
+    StaffLoginResult:
+      type: object
+      required: [account, expires_at]
+      properties:
+        account: { $ref: '#/components/schemas/StaffIdentity' }
+        expires_at: { type: string, format: date-time }
     StaffAccount:
       type: object
       required: [id, email, display_name, role, status, created_at]
