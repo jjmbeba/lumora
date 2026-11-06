@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as EmailPreviewsRouteImport } from './routes/email-previews'
 import { Route as StaffAccountsRouteImport } from './routes/staff.accounts'
 import { Route as StaffLoginRouteImport } from './routes/staff.login'
 import { Route as StaffProfileRouteImport } from './routes/staff.profile'
@@ -18,6 +19,11 @@ import { Route as StaffSetupRouteImport } from './routes/staff.setup'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EmailPreviewsRoute = EmailPreviewsRouteImport.update({
+  id: '/email-previews',
+  path: '/email-previews',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StaffAccountsRoute = StaffAccountsRouteImport.update({
@@ -43,6 +49,7 @@ const StaffSetupRoute = StaffSetupRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/email-previews': typeof EmailPreviewsRoute
   '/staff/accounts': typeof StaffAccountsRoute
   '/staff/login': typeof StaffLoginRoute
   '/staff/profile': typeof StaffProfileRoute
@@ -50,6 +57,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/email-previews': typeof EmailPreviewsRoute
   '/staff/accounts': typeof StaffAccountsRoute
   '/staff/login': typeof StaffLoginRoute
   '/staff/profile': typeof StaffProfileRoute
@@ -58,6 +66,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/email-previews': typeof EmailPreviewsRoute
   '/staff/accounts': typeof StaffAccountsRoute
   '/staff/login': typeof StaffLoginRoute
   '/staff/profile': typeof StaffProfileRoute
@@ -66,13 +75,24 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/staff/accounts' | '/staff/login' | '/staff/profile' | '/staff/setup'
+    | '/'
+    | '/email-previews'
+    | '/staff/accounts'
+    | '/staff/login'
+    | '/staff/profile'
+    | '/staff/setup'
   fileRoutesByTo: FileRoutesByTo
   to:
-    '/' | '/staff/accounts' | '/staff/login' | '/staff/profile' | '/staff/setup'
+    | '/'
+    | '/email-previews'
+    | '/staff/accounts'
+    | '/staff/login'
+    | '/staff/profile'
+    | '/staff/setup'
   id:
     | '__root__'
     | '/'
+    | '/email-previews'
     | '/staff/accounts'
     | '/staff/login'
     | '/staff/profile'
@@ -81,6 +101,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  EmailPreviewsRoute: typeof EmailPreviewsRoute
   StaffAccountsRoute: typeof StaffAccountsRoute
   StaffLoginRoute: typeof StaffLoginRoute
   StaffProfileRoute: typeof StaffProfileRoute
@@ -94,6 +115,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/email-previews': {
+      id: '/email-previews'
+      path: '/email-previews'
+      fullPath: '/email-previews'
+      preLoaderRoute: typeof EmailPreviewsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/staff/accounts': {
@@ -129,6 +157,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  EmailPreviewsRoute: EmailPreviewsRoute,
   StaffAccountsRoute: StaffAccountsRoute,
   StaffLoginRoute: StaffLoginRoute,
   StaffProfileRoute: StaffProfileRoute,

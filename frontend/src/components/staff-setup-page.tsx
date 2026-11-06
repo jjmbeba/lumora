@@ -1,6 +1,8 @@
-import { useSearch } from "@tanstack/react-router";
+import { useForm } from "@tanstack/react-form";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
-
+import * as v from "valibot";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,17 +17,60 @@ import {
   useStartStaffEnrollmentMutation,
 } from "@/features/staff/mutations/use-staff-management-mutations";
 
+const setupFormSchema = v.object({
+  password: v.pipe(
+    v.string(),
+    v.minLength(8, "Use a password with at least 8 characters.")
+  ),
+  code: v.pipe(
+    v.string(),
+    v.regex(/^\d{6}$/u, "Enter the six-digit authenticator code.")
+  ),
+});
+
+const validateWith =
+  <T,>(schema: v.GenericSchema<T>) =>
+  ({ value }: { value: T }) => {
+    const result = v.safeParse(schema, value);
+    return result.success
+      ? undefined
+      : result.issues.map((issue) => issue.message);
+  };
+
+const fieldErrorText = (errors: unknown[]) =>
+  [...new Set(errors.map(String))].join(" ");
+
 export const StaffSetupPage = () => {
+  const navigate = useNavigate();
   const { token } = useSearch({ from: "/staff/setup" });
   const start = useStartStaffEnrollmentMutation();
   const complete = useCompleteStaffEnrollmentMutation();
-  const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  const setupForm = useForm({
+    defaultValues: { password: "", code: "" },
+    onSubmit: async ({ value }) => {
+      if (!start.data) {
+        return;
+      }
+
+      try {
+        await complete.mutateAsync({
+          invitation_token: token,
+          challenge: start.data.challenge,
+          password: value.password,
+          code: value.code,
+        });
+      } catch {
+        // The mutation reports request failures through Sonner.
+      }
+    },
+  });
 
   if (complete.data) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-lg items-center px-5 py-12">
-        <Card className="w-full rounded-xl border p-6 shadow-none ring-0">
+      <main className="mx-auto flex min-h-screen max-w-xl items-center px-5 py-12">
+        <Card className="border-border w-full rounded-xl border p-8 shadow-none ring-0">
           <CardHeader className="p-0">
             <CardTitle>Save your recovery codes</CardTitle>
             <CardDescription>
@@ -40,17 +85,20 @@ export const StaffSetupPage = () => {
               </li>
             ))}
           </ul>
+          <Link to="/staff/login">
+            Continue to staff sign in
+          </Link>
         </Card>
       </main>
     );
   }
 
   return (
-    <main className="relative mx-auto flex min-h-screen max-w-lg items-center px-5 py-12">
+    <main className="relative mx-auto flex min-h-screen max-w-xl items-center px-5 py-12">
       <div className="absolute top-5 right-5">
         <ThemeToggle />
       </div>
-      <Card className="w-full rounded-xl border p-6 shadow-none ring-0">
+      <Card className="border-border w-full rounded-xl border p-8 shadow-none ring-0">
         <CardHeader className="p-0">
           <CardTitle>Set up your Lumora staff account</CardTitle>
           <CardDescription>
@@ -69,42 +117,101 @@ export const StaffSetupPage = () => {
               className="grid gap-4"
               onSubmit={(event) => {
                 event.preventDefault();
-                complete.mutate({
-                  invitation_token: token,
-                  challenge: start.data.challenge,
-                  password,
-                  code,
-                });
+                event.stopPropagation();
+                void setupForm.handleSubmit();
               }}
             >
-              <label className="grid gap-2 text-sm">
-                Password
-                <Input
-                  autoComplete="new-password"
-                  minLength={8}
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-              </label>
-              <label className="grid gap-2 text-sm">
-                Six-digit authenticator code
-                <Input
-                  inputMode="numeric"
-                  maxLength={6}
-                  value={code}
-                  onChange={(event) =>
-                    setCode(
-                      event.target.value.replaceAll(/\D/gu, "").slice(0, 6)
-                    )
-                  }
-                />
-              </label>
-              <Button
-                disabled={
-                  complete.isPending || password.length < 8 || code.length !== 6
-                }
+              <setupForm.Field
+                name="password"
+                validators={{
+                  onBlur: validateWith(setupFormSchema.entries.password),
+                  onSubmit: validateWith(setupFormSchema.entries.password),
+                }}
               >
+                {(field) => (
+                  <div className="space-y-2 text-sm font-medium">
+                    <label htmlFor={field.name}>Password</label>
+                    <div className="relative">
+                      <Input
+                        autoComplete="new-password"
+                        className="bg-muted border-border focus-visible:border-ring focus-visible:ring-ring h-12 pr-12 focus-visible:ring-2 focus-visible:ring-offset-0"
+                        id={field.name}
+                        aria-describedby={`${field.name}-hint`}
+                        aria-invalid={field.state.meta.errors.length > 0}
+                        onBlur={field.handleBlur}
+                        onChange={(event) =>
+                          field.handleChange(event.target.value)
+                        }
+                        type={showPassword ? "text" : "password"}
+                        value={field.state.value}
+                      />
+                      <Button
+                        aria-label={
+                          showPassword ? "Hide password" : "Show password"
+                        }
+                        aria-pressed={showPassword}
+                        className="text-muted-foreground hover:text-foreground absolute top-0 right-0 h-12 w-11 rounded-l-none rounded-r-md"
+                        variant="ghost"
+                        onClick={() => setShowPassword((visible) => !visible)}
+                        type="button"
+                      >
+                        {showPassword ? (
+                          <EyeOff aria-hidden="true" className="size-4" />
+                        ) : (
+                          <Eye aria-hidden="true" className="size-4" />
+                        )}
+                      </Button>
+                    </div>
+                    {field.state.meta.errors.length > 0 ? (
+                      <span
+                        className="text-destructive text-xs"
+                        id={`${field.name}-hint`}
+                      >
+                        {fieldErrorText(field.state.meta.errors)}
+                      </span>
+                    ) : null}
+                  </div>
+                )}
+              </setupForm.Field>
+              <setupForm.Field
+                name="code"
+                validators={{
+                  onBlur: validateWith(setupFormSchema.entries.code),
+                  onSubmit: validateWith(setupFormSchema.entries.code),
+                }}
+              >
+                {(field) => (
+                  <label
+                    className="grid gap-2 text-sm font-medium"
+                    htmlFor={field.name}
+                  >
+                    Six-digit authenticator code
+                    <Input
+                      id={field.name}
+                      inputMode="numeric"
+                      maxLength={6}
+                      aria-describedby={`${field.name}-hint`}
+                      aria-invalid={field.state.meta.errors.length > 0}
+                      value={field.state.value}
+                      onBlur={field.handleBlur}
+                      onChange={(event) =>
+                        field.handleChange(
+                          event.target.value.replaceAll(/\D/gu, "").slice(0, 6)
+                        )
+                      }
+                    />
+                    {field.state.meta.errors.length > 0 ? (
+                      <span
+                        className="text-destructive text-xs"
+                        id={`${field.name}-hint`}
+                      >
+                        {fieldErrorText(field.state.meta.errors)}
+                      </span>
+                    ) : null}
+                  </label>
+                )}
+              </setupForm.Field>
+              <Button disabled={complete.isPending} type="submit">
                 {complete.isPending ? "Setting up…" : "Complete setup"}
               </Button>
             </form>

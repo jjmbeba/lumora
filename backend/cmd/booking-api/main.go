@@ -55,7 +55,7 @@ func runMain() error {
 		return err
 	}
 
-	emailFrom, err := config.RequireEnv("EMAIL_FROM")
+	emailFrom, err := config.RequireEnv("RESEND_EMAIL_FROM")
 	if err != nil {
 		return err
 	}
@@ -138,7 +138,7 @@ func run(ctx context.Context, dsn, resendApiKey, emailFrom, bookingHmacKey, list
 		return err
 	}
 
-	resendSender, err := resend.NewResendSender(resendApiKey, emailFrom)
+	resendSender, err := resend.NewResendSender(resendApiKey, emailFrom, resend.Config{Environment: os.Getenv("APP_ENV"), TestRecipient: os.Getenv("RESEND_TEST_RECIPIENT")})
 	if err != nil {
 		return err
 	}

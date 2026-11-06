@@ -35,7 +35,7 @@ STAFF_INVITATION_KEY_VERSIONS=1
 STAFF_INVITATION_KEY_1=<standard-base64-encoded 32-byte key>
 ```
 
-The booking API uses this ring when creating invitations; run `cd backend && go run ./cmd/staff-invitation-worker` with the same retained versions and `STAFF_INVITATION_SETUP_URL` set to the frontend's account-setup page. The API also requires `STAFF_FRONTEND_ORIGIN`, such as `https://staff.example.com`. The invitation worker requires `DATABASE_URL`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `STAFF_INVITATION_SETUP_URL`, and the invitation key-ring variables above. The setup URL must be HTTPS, except for loopback development URLs. The worker clears invitation ciphertext after successful delivery, consumption, revocation, or expiry. Keep old keys while any retryable invitation email still has encrypted token data.
+The booking API uses this ring when creating invitations; run `cd backend && go run ./cmd/staff-invitation-worker` with the same retained versions and `STAFF_INVITATION_SETUP_URL` set to the frontend's account-setup page. The API also requires `STAFF_FRONTEND_ORIGIN`, such as `https://staff.example.com`. The invitation worker requires `DATABASE_URL`, `RESEND_API_KEY`, `RESEND_EMAIL_FROM` (or legacy `RESEND_FROM_EMAIL`), `STAFF_INVITATION_SETUP_URL`, and the invitation key-ring variables above. The setup URL must be HTTPS, except for loopback development URLs. The worker clears invitation ciphertext after successful delivery, consumption, revocation, or expiry. Keep old keys while any retryable invitation email still has encrypted token data.
 
 ## Manager invitations
 

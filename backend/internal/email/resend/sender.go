@@ -1,11 +1,15 @@
 package resend
 
 import (
+	"bytes"
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"html"
+	htmltemplate "html/template"
 	"strings"
+	texttemplate "text/template"
 	"time"
 
 	"github.com/jjmbeba/lumora/backend/internal/booking"
@@ -16,17 +20,30 @@ import (
 )
 
 type ResendSender struct {
-	client      *resend.Client
-	fromAddress string
+	client            *resend.Client
+	fromAddress       string
+	recipientOverride string
+	invitationHTML    *htmltemplate.Template
+	invitationText    *texttemplate.Template
 }
+
+type Config struct {
+	Environment   string
+	TestRecipient string
+}
+
+//go:embed templates/staff_invitation.html templates/staff_invitation.txt
+var staffInvitationTemplates embed.FS
 
 var _ booking.VerificationEmailSender = (*ResendSender)(nil)
 var _ staff.InvitationEmailSender = (*ResendSender)(nil)
 var _ ticket.TicketEmailSender = (*ResendSender)(nil)
 
-func NewResendSender(apiKey string, fromAddress string) (*ResendSender, error) {
+func NewResendSender(apiKey string, fromAddress string, config Config) (*ResendSender, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	fromAddress = strings.TrimSpace(fromAddress)
+	config.Environment = strings.TrimSpace(config.Environment)
+	config.TestRecipient = strings.TrimSpace(config.TestRecipient)
 	if apiKey == "" {
 		return nil, errors.New("Resend API key is required")
 	}
@@ -35,9 +52,26 @@ func NewResendSender(apiKey string, fromAddress string) (*ResendSender, error) {
 		return nil, errors.New("sender address is required")
 	}
 
+	if config.TestRecipient != "" && config.Environment != "development" {
+		return nil, errors.New("Resend test recipient override is only allowed in development")
+	}
+
+	invitationHTML, err := htmltemplate.ParseFS(staffInvitationTemplates, "templates/staff_invitation.html")
+	if err != nil {
+		return nil, fmt.Errorf("parse staff invitation HTML template: %w", err)
+	}
+
+	invitationText, err := texttemplate.ParseFS(staffInvitationTemplates, "templates/staff_invitation.txt")
+	if err != nil {
+		return nil, fmt.Errorf("parse staff invitation text template: %w", err)
+	}
+
 	return &ResendSender{
-		client:      resend.NewClient(apiKey),
-		fromAddress: fromAddress,
+		client:            resend.NewClient(apiKey),
+		fromAddress:       fromAddress,
+		recipientOverride: config.TestRecipient,
+		invitationHTML:    invitationHTML,
+		invitationText:    invitationText,
 	}, nil
 }
 
@@ -141,12 +175,23 @@ func (r *ResendSender) SendStaffInvitationEmail(ctx context.Context, email staff
 	}
 
 	expiry := email.ExpiresAt.UTC().Format(time.RFC1123)
-	textBody := fmt.Sprintf("You have been invited to join the cinema ticketing staff. Set up your account using this single-use link: %s\n\nThis link expires at %s. If you were not expecting this invitation, you can ignore this email.", email.SetupURL, expiry)
-
-	htmlBody := fmt.Sprintf("<p>You have been invited to join the cinema ticketing staff.</p><p><a href=\"%s\">Set up your staff account</a></p><p>This single-use link expires at %s. If you were not expecting this invitation, you can ignore this email.</p>", html.EscapeString(email.SetupURL), html.EscapeString(expiry))
+	data := staffInvitationTemplateData{
+		DisplayName: invitationDisplayName(email.DisplayName),
+		Role:        invitationRoleLabel(email.Role),
+		SetupURL:    email.SetupURL,
+		ExpiresAt:   expiry,
+	}
+	var textBody bytes.Buffer
+	if err := r.invitationText.Execute(&textBody, data); err != nil {
+		return fmt.Errorf("render staff invitation text email: %w", err)
+	}
+	var htmlBody bytes.Buffer
+	if err := r.invitationHTML.Execute(&htmlBody, data); err != nil {
+		return fmt.Errorf("render staff invitation HTML email: %w", err)
+	}
 	params := &resend.SendEmailRequest{
 		From: r.fromAddress, To: []string{recipient},
-		Subject: "Set up your cinema staff account", Text: textBody, Html: htmlBody,
+		Subject: "You’re invited to join Lumora", Text: textBody.String(), Html: htmlBody.String(),
 	}
 
 	options := &resend.SendEmailOptions{IdempotencyKey: email.IdempotencyKey}
@@ -157,12 +202,40 @@ func (r *ResendSender) SendStaffInvitationEmail(ctx context.Context, email staff
 	return nil
 }
 
+type staffInvitationTemplateData struct {
+	DisplayName string
+	Role        string
+	SetupURL    string
+	ExpiresAt   string
+}
+
+func invitationDisplayName(name string) string {
+	if name = strings.TrimSpace(name); name != "" {
+		return name
+	}
+	return "there"
+}
+
+func invitationRoleLabel(role staff.Role) string {
+	switch role {
+	case staff.RoleManager:
+		return "Manager"
+	case staff.RoleScanner:
+		return "Scanner"
+	default:
+		return "staff member"
+	}
+}
+
 func (r *ResendSender) validateRecipient(address string) (string, error) {
 	address = strings.TrimSpace(address)
 	if address == "" {
 		return "", errors.New("recipient email is required")
 	}
 
+	if r.recipientOverride != "" {
+		return r.recipientOverride, nil
+	}
 	return address, nil
 }
 

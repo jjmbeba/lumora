@@ -89,7 +89,8 @@ func (q *Queries) FailExpiredStaffInvitationEmailJobs(ctx context.Context) error
 }
 
 const loadStaffInvitationEmail = `-- name: LoadStaffInvitationEmail :one
-SELECT sa.email, si.token_ciphertext, si.token_key_version, si.expires_at
+SELECT sa.email, sa.display_name, sa.role::text AS role,
+       si.token_ciphertext, si.token_key_version, si.expires_at
 FROM email_outbox AS eo
 JOIN staff_invitations AS si ON si.id = eo.staff_invitation_id
 JOIN staff_accounts AS sa ON sa.id = si.staff_account_id
@@ -110,6 +111,8 @@ type LoadStaffInvitationEmailParams struct {
 
 type LoadStaffInvitationEmailRow struct {
 	Email           string
+	DisplayName     string
+	Role            string
 	TokenCiphertext []byte
 	TokenKeyVersion sql.NullInt16
 	ExpiresAt       time.Time
@@ -120,6 +123,8 @@ func (q *Queries) LoadStaffInvitationEmail(ctx context.Context, arg LoadStaffInv
 	var i LoadStaffInvitationEmailRow
 	err := row.Scan(
 		&i.Email,
+		&i.DisplayName,
+		&i.Role,
 		&i.TokenCiphertext,
 		&i.TokenKeyVersion,
 		&i.ExpiresAt,

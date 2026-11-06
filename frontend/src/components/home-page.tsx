@@ -44,8 +44,14 @@ export const HomePage = () => (
         </div>
       </div>
     </section>
-    <footer className="border-border text-muted-foreground border-t pt-5 text-sm">
-      Booking and venue tools are coming online next.
+    <footer className="border-border text-muted-foreground flex flex-wrap items-center justify-between gap-3 border-t pt-5 text-sm">
+      <span>Booking and venue tools are coming online next.</span>
+      <Link
+        className="hover:text-foreground underline-offset-4 hover:underline"
+        to="/email-previews"
+      >
+        Email previews
+      </Link>
     </footer>
   </div>
 );

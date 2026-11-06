@@ -21,6 +21,8 @@ type InvitationEmailJob struct {
 
 type InvitationEmailDelivery struct {
 	Email           string
+	DisplayName     string
+	Role            Role
 	TokenCiphertext []byte
 	TokenKeyVersion int16
 	ExpiresAt       time.Time
@@ -28,6 +30,8 @@ type InvitationEmailDelivery struct {
 
 type StaffInvitationEmail struct {
 	To             string
+	DisplayName    string
+	Role           Role
 	SetupURL       string
 	IdempotencyKey string
 	ExpiresAt      time.Time
@@ -135,7 +139,8 @@ func (w *InvitationEmailWorker) process(ctx context.Context, job InvitationEmail
 			setupURL.RawQuery = query.Encode()
 			sendCtx, cancel := context.WithTimeout(ctx, w.config.SendTimeout)
 			err = w.sender.SendStaffInvitationEmail(sendCtx, StaffInvitationEmail{
-				To: delivery.Email, SetupURL: setupURL.String(), IdempotencyKey: job.EventKey, ExpiresAt: delivery.ExpiresAt,
+				To: delivery.Email, DisplayName: delivery.DisplayName, Role: delivery.Role,
+				SetupURL: setupURL.String(), IdempotencyKey: job.EventKey, ExpiresAt: delivery.ExpiresAt,
 			})
 
 			cancel()

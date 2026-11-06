@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jjmbeba/lumora/backend/internal/booking"
+	"github.com/jjmbeba/lumora/backend/internal/staff"
 	"github.com/jjmbeba/lumora/backend/internal/ticket"
 	resendSDK "github.com/resend/resend-go/v4"
 )
@@ -172,17 +173,54 @@ func TestSendTicketEmailEmbedsQRsAndUsesIdempotencyKey(t *testing.T) {
 }
 
 func TestNewResendSenderRejectsBlankConfiguration(t *testing.T) {
-	if _, err := NewResendSender("  ", "sender@example.com"); err == nil {
+	if _, err := NewResendSender("  ", "sender@example.com", Config{}); err == nil {
 		t.Error("NewResendSender() accepted a blank API key")
 	}
-	if _, err := NewResendSender("test-key", "  "); err == nil {
+	if _, err := NewResendSender("test-key", "  ", Config{}); err == nil {
 		t.Error("NewResendSender() accepted a blank sender address")
+	}
+	if _, err := NewResendSender("test-key", "sender@example.com", Config{Environment: "production", TestRecipient: "dev@example.com"}); err == nil {
+		t.Error("NewResendSender() accepted a test recipient outside development")
+	}
+}
+
+func TestTestRecipientOverrideAppliesToEveryEmailKind(t *testing.T) {
+	var recipients [][]string
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var request struct {
+			To []string `json:"to"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		recipients = append(recipients, request.To)
+		return jsonResponse(http.StatusOK, `{"id":"email-test-id"}`), nil
+	})
+	sender := newTestResendSender(t, transport)
+	sender.recipientOverride = "owner@example.com"
+
+	if err := sender.SendVerificationCode(context.Background(), booking.VerificationCodeEmail{To: "customer@example.com", Code: "123456", ExpiresIn: time.Minute}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.SendTicketEmail(context.Background(), ticket.TicketEmail{To: "customer@example.com", BookingReference: "B-1", IdempotencyKey: "ticket:1", Tickets: []ticket.TicketEmailItem{{SeatLabel: "A1", Credential: "credential"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.SendStaffInvitationEmail(context.Background(), staff.StaffInvitationEmail{To: "staff@example.com", SetupURL: "https://localhost/setup?token=secret", IdempotencyKey: "invite:1", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(recipients) != 3 {
+		t.Fatalf("sent %d messages, want 3", len(recipients))
+	}
+	for _, to := range recipients {
+		if len(to) != 1 || to[0] != "owner@example.com" {
+			t.Errorf("recipient = %v, want [owner@example.com]", to)
+		}
 	}
 }
 
 func newTestResendSender(t *testing.T, transport http.RoundTripper) *ResendSender {
 	t.Helper()
-	sender, err := NewResendSender("test-api-key", " Cinema <tickets@example.com> ")
+	sender, err := NewResendSender("test-api-key", " Cinema <tickets@example.com> ", Config{})
 	if err != nil {
 		t.Fatalf("NewResendSender() error = %v", err)
 	}
