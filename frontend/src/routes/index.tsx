@@ -1,5 +1,4 @@
-import { Link } from "@tanstack/react-router";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowUpRight, Clapperboard } from "lucide-react";
 
 const HomePage = () => (
