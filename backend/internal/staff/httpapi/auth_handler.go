@@ -57,6 +57,10 @@ type loginResponse struct {
 	ExpiresAt time.Time        `json:"expires_at"`
 }
 
+type sessionResponse struct {
+	Account identityResponse `json:"account"`
+}
+
 type invitationEnrollmentChallengeResponse struct {
 	Challenge  string    `json:"challenge"`
 	TOTPSecret string    `json:"totp_secret"`
@@ -235,6 +239,24 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	identity, ok := IdentityFromContext(r)
+	if !ok {
+		http.Error(w, "staff authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	writeAuthJSON(w, http.StatusOK, sessionResponse{Account: identityResponse{
+		ID: identity.AccountID, Email: identity.Email, DisplayName: identity.DisplayName, Role: string(identity.Role),
+	}})
+}
+
 // RequireSession authenticates the opaque HttpOnly cookie on every protected
 // request; the returned identity is stored in the request context.
 func (h *AuthHandler) RequireSession(next http.Handler) http.Handler {
@@ -359,6 +381,7 @@ func RegisterAuthRoutes(mux *http.ServeMux, handler *AuthHandler) error {
 
 	mux.HandleFunc("POST /api/v1/staff/auth/login", handler.StartLogin)
 	mux.HandleFunc("POST /api/v1/staff/auth/mfa", handler.CompleteLogin)
+	mux.Handle("GET /api/v1/staff/auth/session", handler.RequireSession(http.HandlerFunc(handler.Session)))
 	mux.Handle("POST /api/v1/staff/auth/logout", handler.RequireCSRF(http.HandlerFunc(handler.Logout)))
 	mux.HandleFunc("POST /api/v1/staff/invitations/setup/start", handler.StartInvitationEnrollment)
 	mux.HandleFunc("POST /api/v1/staff/invitations/setup/complete", handler.CompleteInvitationEnrollment)

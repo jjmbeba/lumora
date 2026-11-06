@@ -1,9 +1,12 @@
+import { useForm } from "@tanstack/react-form";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { LogOut, Search } from "lucide-react";
-import { useDeferredValue, useEffect } from "react";
+import { Search } from "lucide-react";
+import { useDeferredValue, useEffect, useState } from "react";
+import * as v from "valibot";
 
-import { ThemeToggle } from "@/components/theme-toggle";
+import type { components } from "@/api/generated";
+import { StaffHeader } from "@/components/staff-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +16,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -30,10 +41,33 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useLogoutStaffMutation } from "@/features/staff/mutations/use-staff-auth-mutations";
+import {
+  useCreateStaffInvitationMutation,
+  useDeactivateStaffAccountMutation,
+  useResendStaffInvitationMutation,
+} from "@/features/staff/mutations/use-staff-management-mutations";
 import { useStaffAccountsQuery } from "@/features/staff/queries/use-staff-accounts";
+import { useStaffSessionQuery } from "@/features/staff/queries/use-staff-session";
 import { ApiError } from "@/lib/api";
 import { getErrorMessage } from "@/lib/error-message";
+
+const inviteFormSchema = v.object({
+  display_name: v.pipe(v.string(), v.trim(), v.minLength(1, "Enter a name.")),
+  email: v.pipe(v.string(), v.trim(), v.email("Enter a valid email address.")),
+  role: v.picklist(["MANAGER", "SCANNER"]),
+});
+
+const validateWith =
+  <T,>(schema: v.GenericSchema<T>) =>
+  ({ value }: { value: T }) => {
+    const result = v.safeParse(schema, value);
+    return result.success
+      ? undefined
+      : result.issues.map((issue) => issue.message);
+  };
+
+const fieldErrorText = (errors: unknown[]) =>
+  [...new Set(errors.map(String))].join(" ");
 
 const dateFormatter = new Intl.DateTimeFormat("en-KE", {
   dateStyle: "medium",
@@ -54,16 +88,44 @@ export const StaffAccountsPage = () => {
     ...searchState,
     search: deferredSearch,
   });
+  const sessionQuery = useStaffSessionQuery();
   const { data, error } = accountsQuery;
 
   useEffect(() => {
-    if (error instanceof ApiError && error.status === 401) {
+    if (
+      (error instanceof ApiError && error.status === 401) ||
+      (sessionQuery.error instanceof ApiError &&
+        sessionQuery.error.status === 401)
+    ) {
       queryClient.clear();
-      navigate({ to: "/staff/login" });
+      void navigate({ to: "/staff/login" });
     }
-  }, [error, navigate, queryClient]);
+  }, [error, navigate, queryClient, sessionQuery.error]);
 
-  const logoutMutation = useLogoutStaffMutation();
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [accountToDeactivate, setAccountToDeactivate] = useState<
+    components["schemas"]["StaffAccount"] | null
+  >(null);
+  const createInvitation = useCreateStaffInvitationMutation();
+  const resendInvitation = useResendStaffInvitationMutation();
+  const deactivateAccount = useDeactivateStaffAccountMutation();
+
+  const inviteForm = useForm({
+    defaultValues: {
+      display_name: "",
+      email: "",
+      role: "SCANNER" as components["schemas"]["StaffIdentity"]["role"],
+    },
+    onSubmit: async ({ value }) => {
+      try {
+        await createInvitation.mutateAsync(value);
+        inviteForm.reset();
+        setInviteOpen(false);
+      } catch {
+        // Mutation reports API errors through Sonner.
+      }
+    },
+  });
 
   const isForbidden = error instanceof ApiError && error.status === 403;
 
@@ -159,6 +221,9 @@ export const StaffAccountsPage = () => {
                 <TableHead className="px-4 py-3 font-medium" scope="col">
                   Created
                 </TableHead>
+                <TableHead className="px-4 py-3 font-medium" scope="col">
+                  Actions
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="divide-border divide-y">
@@ -181,6 +246,32 @@ export const StaffAccountsPage = () => {
                   </TableCell>
                   <TableCell className="text-muted-foreground px-4 py-3">
                     {dateFormatter.format(new Date(account.created_at))}
+                  </TableCell>
+                  <TableCell className="flex gap-2 px-4 py-3">
+                    {account.status === "INVITED" ? (
+                      <Button
+                        disabled={resendInvitation.isPending}
+                        onClick={() => resendInvitation.mutate(account.id)}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Resend
+                      </Button>
+                    ) : null}
+                    {sessionQuery.data?.account.id === account.id ? (
+                      <span className="text-muted-foreground px-2 text-xs">
+                        You
+                      </span>
+                    ) : account.status !== "DISABLED" && sessionQuery.data ? (
+                      <Button
+                        disabled={deactivateAccount.isPending}
+                        onClick={() => setAccountToDeactivate(account)}
+                        size="sm"
+                        variant="outline"
+                      >
+                        Deactivate
+                      </Button>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))}
@@ -272,36 +363,25 @@ export const StaffAccountsPage = () => {
 
   return (
     <main className="mx-auto min-h-screen max-w-6xl px-5 py-10 sm:px-8">
-      <header className="border-border flex flex-wrap items-center justify-between gap-4 border-b pb-6">
-        <div>
-          <p className="text-muted-foreground text-xs font-semibold tracking-[0.18em] uppercase">
-            Lumora · Team
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">
-            Staff accounts
-          </h1>
-        </div>
-        <div className="flex items-center gap-3">
-          <ThemeToggle />
-          <Button
-            className="h-10 rounded-lg px-4 text-sm font-medium"
-            disabled={logoutMutation.isPending}
-            onClick={async () => {
-              try {
-                await logoutMutation.mutateAsync();
-                queryClient.clear();
-                await navigate({ to: "/staff/login" });
-              } catch {
-                // The mutation reports request failures through Sonner.
-              }
-            }}
-            variant="outline"
-          >
-            <LogOut aria-hidden="true" className="size-4" />
-            {logoutMutation.isPending ? "Signing out…" : "Sign out"}
-          </Button>
-        </div>
-      </header>
+      {sessionQuery.data ? (
+        <StaffHeader
+          eyebrow="Lumora · Team"
+          title="Staff accounts"
+          session={sessionQuery.data}
+        />
+      ) : (
+        <header className="border-border flex items-center justify-between border-b pb-6">
+          <div>
+            <p className="text-muted-foreground text-xs font-semibold tracking-[0.18em] uppercase">
+              Lumora · Team
+            </p>
+            <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+              Staff accounts
+            </h1>
+          </div>
+          <Skeleton className="size-10 rounded-full" />
+        </header>
+      )}
 
       {isForbidden ? (
         <Card className="border-border bg-card mt-8 rounded-xl border p-6 shadow-none ring-0">
@@ -323,34 +403,216 @@ export const StaffAccountsPage = () => {
                 Find staff accounts by name or email.
               </p>
             </div>
-            <label className="relative block w-full sm:max-w-sm">
-              <span className="sr-only">Search staff accounts</span>
-              <Search
-                aria-hidden="true"
-                className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2"
-              />
-              <Input
-                className="bg-background h-10 rounded-lg pr-3 pl-9 text-sm"
-                onChange={(event) =>
-                  navigate({
-                    search: (previous) => ({
-                      ...previous,
-                      search: event.target.value.slice(0, 100),
-                      page: 1,
-                    }),
-                    replace: true,
-                  })
-                }
-                placeholder="Search name or email"
-                type="search"
-                value={searchState.search}
-              />
-            </label>
+            <div className="flex w-full gap-3 sm:max-w-xl">
+              <label className="relative block min-w-0 flex-1">
+                <span className="sr-only">Search staff accounts</span>
+                <Search
+                  aria-hidden="true"
+                  className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2"
+                />
+                <Input
+                  className="bg-background h-10 rounded-lg pr-3 pl-9 text-sm"
+                  onChange={(event) =>
+                    navigate({
+                      search: (previous) => ({
+                        ...previous,
+                        search: event.target.value.slice(0, 100),
+                        page: 1,
+                      }),
+                      replace: true,
+                    })
+                  }
+                  placeholder="Search name or email"
+                  type="search"
+                  value={searchState.search}
+                />
+              </label>
+              <Dialog
+                open={inviteOpen}
+                onOpenChange={(open) => {
+                  setInviteOpen(open);
+                  if (!open) inviteForm.reset();
+                }}
+              >
+                <DialogTrigger render={<Button variant="outline" />}>
+                  Invite staff
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Invite a staff member</DialogTitle>
+                    <DialogDescription>
+                      We’ll email them a single-use link to set up their account
+                      and authenticator.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <form
+                    className="grid gap-4"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void inviteForm.handleSubmit();
+                    }}
+                  >
+                    <inviteForm.Field
+                      name="display_name"
+                      validators={{
+                        onBlur: validateWith(
+                          inviteFormSchema.entries.display_name
+                        ),
+                        onSubmit: validateWith(
+                          inviteFormSchema.entries.display_name
+                        ),
+                      }}
+                    >
+                      {(field) => (
+                        <label
+                          className="grid gap-2 text-sm font-medium"
+                          htmlFor={field.name}
+                        >
+                          Name
+                          <Input
+                            id={field.name}
+                            value={field.state.value}
+                            onBlur={field.handleBlur}
+                            onChange={(event) =>
+                              field.handleChange(event.target.value)
+                            }
+                            aria-invalid={
+                              field.state.meta.isTouched &&
+                              field.state.meta.errors.length > 0
+                            }
+                          />
+                          {field.state.meta.isTouched &&
+                          field.state.meta.errors.length > 0 ? (
+                            <span className="text-destructive text-xs">
+                              {fieldErrorText(field.state.meta.errors)}
+                            </span>
+                          ) : null}
+                        </label>
+                      )}
+                    </inviteForm.Field>
+                    <inviteForm.Field
+                      name="email"
+                      validators={{
+                        onBlur: validateWith(inviteFormSchema.entries.email),
+                        onSubmit: validateWith(inviteFormSchema.entries.email),
+                      }}
+                    >
+                      {(field) => (
+                        <label
+                          className="grid gap-2 text-sm font-medium"
+                          htmlFor={field.name}
+                        >
+                          Email
+                          <Input
+                            autoComplete="email"
+                            id={field.name}
+                            type="email"
+                            value={field.state.value}
+                            onBlur={field.handleBlur}
+                            onChange={(event) =>
+                              field.handleChange(event.target.value)
+                            }
+                            aria-invalid={
+                              field.state.meta.isTouched &&
+                              field.state.meta.errors.length > 0
+                            }
+                          />
+                          {field.state.meta.isTouched &&
+                          field.state.meta.errors.length > 0 ? (
+                            <span className="text-destructive text-xs">
+                              {fieldErrorText(field.state.meta.errors)}
+                            </span>
+                          ) : null}
+                        </label>
+                      )}
+                    </inviteForm.Field>
+                    <inviteForm.Field name="role">
+                      {(field) => (
+                        <label className="grid gap-2 text-sm font-medium">
+                          Role
+                          <Select
+                            value={field.state.value}
+                            onValueChange={(value) =>
+                              field.handleChange(
+                                value === "MANAGER" ? "MANAGER" : "SCANNER"
+                              )
+                            }
+                          >
+                            <SelectTrigger
+                              aria-label="Staff role"
+                              className="border-border bg-background text-foreground focus-visible:border-primary focus-visible:ring-primary/20 h-10 w-full focus-visible:ring-2"
+                            >
+                              <SelectValue>
+                                {field.state.value === "MANAGER"
+                                  ? "Manager"
+                                  : "Scanner"}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="SCANNER">Scanner</SelectItem>
+                              <SelectItem value="MANAGER">Manager</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </label>
+                      )}
+                    </inviteForm.Field>
+                    <Button
+                      className="h-10"
+                      disabled={createInvitation.isPending}
+                      type="submit"
+                    >
+                      {createInvitation.isPending
+                        ? "Sending invitation…"
+                        : "Send invitation"}
+                    </Button>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
 
           {renderDirectoryContent()}
         </>
       )}
+
+      <Dialog
+        open={accountToDeactivate !== null}
+        onOpenChange={(open) => {
+          if (!open) setAccountToDeactivate(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Deactivate staff account?</DialogTitle>
+            <DialogDescription>
+              {accountToDeactivate
+                ? `${accountToDeactivate.display_name} will no longer be able to sign in.`
+                : "This staff member will no longer be able to sign in."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button
+              onClick={() => setAccountToDeactivate(null)}
+              variant="outline"
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!accountToDeactivate || deactivateAccount.isPending}
+              onClick={() => {
+                if (!accountToDeactivate) return;
+                deactivateAccount.mutate(accountToDeactivate.id, {
+                  onSuccess: () => setAccountToDeactivate(null),
+                });
+              }}
+              variant="destructive"
+            >
+              {deactivateAccount.isPending ? "Deactivating…" : "Deactivate"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 };

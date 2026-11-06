@@ -40,8 +40,13 @@ export const apiRequest = async <T>(
   return data as T;
 };
 
-export const postJSON = <T>(path: string, body: unknown): Promise<T> =>
+export const postJSON = <T>(
+  path: string,
+  body: unknown,
+  init: Omit<RequestInit, "body" | "method"> = {}
+): Promise<T> =>
   apiRequest<T>(path, {
+    ...init,
     method: "POST",
     body: JSON.stringify(body),
   });

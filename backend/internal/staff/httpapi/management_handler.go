@@ -77,6 +77,8 @@ func (h *ManagementHandler) DeactivateAccount(w http.ResponseWriter, r *http.Req
 		http.Error(w, "staff account not found", http.StatusNotFound)
 	case errors.Is(err, staff.ErrLastActiveManager):
 		http.Error(w, "cannot deactivate the last active manager", http.StatusConflict)
+	case errors.Is(err, staff.ErrCannotDeactivateSelf):
+		http.Error(w, "cannot deactivate your own staff account", http.StatusConflict)
 	case errors.Is(err, staff.ErrManagerUnavailable):
 		http.Error(w, "staff manager is unavailable", http.StatusForbidden)
 	default:

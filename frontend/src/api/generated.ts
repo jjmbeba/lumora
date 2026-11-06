@@ -4,291 +4,656 @@
  */
 
 export interface paths {
-  "/api/v1/staff/accounts": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
+    "/api/v1/staff/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search and paginate staff accounts */
+        get: operations["listStaffAccounts"];
+        put?: never;
+        /** Create a staff account invitation */
+        post: operations["createStaffInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    /** Search and paginate staff accounts */
-    get: operations["listStaffAccounts"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/staff/auth/login": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
+    "/api/v1/staff/accounts/{id}/invitation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resend a pending staff invitation */
+        post: operations["resendStaffInvitation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    get?: never;
-    put?: never;
-    /** Verify staff password and begin MFA */
-    post: operations["startStaffLogin"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/staff/auth/mfa": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
+    "/api/v1/staff/accounts/{id}/deactivation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Deactivate a staff account */
+        post: operations["deactivateStaffAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    get?: never;
-    put?: never;
-    /** Complete MFA and set the staff session cookie */
-    post: operations["completeStaffLogin"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/v1/staff/auth/logout": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
+    "/api/v1/staff/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Verify staff password and begin MFA */
+        post: operations["startStaffLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    get?: never;
-    put?: never;
-    /** Revoke the current staff session */
-    post: operations["logoutStaff"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
+    "/api/v1/staff/auth/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete MFA and set the staff session cookie */
+        post: operations["completeStaffLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/staff/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke the current staff session */
+        post: operations["logoutStaff"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/staff/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the current authenticated staff identity */
+        get: operations["getStaffSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/staff/invitations/setup/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Begin password and authenticator setup for an invited staff member */
+        post: operations["startStaffEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/staff/invitations/setup/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete password and MFA setup for an invited staff member */
+        post: operations["completeStaffEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-  schemas: {
-    StaffLoginChallenge: {
-      challenge: string;
-      /** @enum {string} */
-      purpose: "MFA_SIGN_IN";
-      /** Format: date-time */
-      expires_at: string;
+    schemas: {
+        StaffLoginChallenge: {
+            challenge: string;
+            /** @enum {string} */
+            purpose: "MFA_SIGN_IN";
+            /** Format: date-time */
+            expires_at: string;
+        };
+        StaffIdentity: {
+            id: number;
+            /** Format: email */
+            email: string;
+            display_name: string;
+            /** @enum {string} */
+            role: "MANAGER" | "SCANNER";
+        };
+        StaffLoginResult: {
+            account: components["schemas"]["StaffIdentity"];
+            /** Format: date-time */
+            expires_at: string;
+        };
+        StaffSession: {
+            account: components["schemas"]["StaffIdentity"];
+        };
+        StaffAccount: {
+            id: number;
+            /** Format: email */
+            email: string;
+            display_name: string;
+            /** @enum {string} */
+            role: "MANAGER" | "SCANNER";
+            /** @enum {string} */
+            status: "INVITED" | "ACTIVE" | "DISABLED";
+            /** Format: date-time */
+            created_at: string;
+        };
+        StaffAccountPage: {
+            accounts: components["schemas"]["StaffAccount"][];
+            page: number;
+            page_size: number;
+            has_more: boolean;
+        };
+        StaffInvitationResult: {
+            account: components["schemas"]["StaffIdentity"];
+            /** @enum {string} */
+            status: "INVITED";
+        };
+        StaffEnrollmentChallenge: {
+            challenge: string;
+            totp_secret: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        StaffEnrollmentResult: {
+            account: components["schemas"]["StaffIdentity"];
+            recovery_codes: string[];
+        };
     };
-    StaffIdentity: {
-      id: number;
-      /** Format: email */
-      email: string;
-      display_name: string;
-      /** @enum {string} */
-      role: "MANAGER" | "SCANNER";
+    responses: never;
+    parameters: {
+        StaffRequestHeader: "1";
     };
-    StaffLoginResult: {
-      account: components["schemas"]["StaffIdentity"];
-      /** Format: date-time */
-      expires_at: string;
-    };
-    StaffAccount: {
-      id: number;
-      /** Format: email */
-      email: string;
-      display_name: string;
-      /** @enum {string} */
-      role: "MANAGER" | "SCANNER";
-      /** @enum {string} */
-      status: "INVITED" | "ACTIVE" | "DISABLED";
-      /** Format: date-time */
-      created_at: string;
-    };
-    StaffAccountPage: {
-      accounts: components["schemas"]["StaffAccount"][];
-      page: number;
-      page_size: number;
-      has_more: boolean;
-    };
-  };
-  responses: never;
-  parameters: never;
-  requestBodies: never;
-  headers: never;
-  pathItems: never;
+    requestBodies: never;
+    headers: never;
+    pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-  listStaffAccounts: {
-    parameters: {
-      query?: {
-        page?: number;
-        page_size?: number;
-        search?: string;
-      };
-      header?: never;
-      path?: never;
-      cookie?: never;
+    listStaffAccounts: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                search?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Staff account page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffAccountPage"];
+                };
+            };
+            /** @description Invalid pagination or search options */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid staff session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The signed-in staff member is not a manager */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
     };
-    requestBody?: never;
-    responses: {
-      /** @description Staff account page */
-      200: {
-        headers: {
-          [name: string]: unknown;
+    createStaffInvitation: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Staff-Request": components["parameters"]["StaffRequestHeader"];
+            };
+            path?: never;
+            cookie?: never;
         };
-        content: {
-          "application/json": components["schemas"]["StaffAccountPage"];
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: email */
+                    email: string;
+                    display_name: string;
+                    /** @enum {string} */
+                    role: "MANAGER" | "SCANNER";
+                };
+            };
         };
-      };
-      /** @description Invalid pagination or search options */
-      400: {
-        headers: {
-          [name: string]: unknown;
+        responses: {
+            /** @description Invitation email queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffInvitationResult"];
+                };
+            };
+            /** @description Invalid invitation details */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid staff session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Manager access or CSRF check failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Email already belongs to a staff account */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
-        content?: never;
-      };
-      /** @description Missing or invalid staff session */
-      401: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description The signed-in staff member is not a manager */
-      403: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
     };
-  };
-  startStaffLogin: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
+    resendStaffInvitation: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Staff-Request": components["parameters"]["StaffRequestHeader"];
+            };
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description New invitation email queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffInvitationResult"];
+                };
+            };
+            /** @description Missing or invalid staff session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Manager access or CSRF check failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Pending invitation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
     };
-    requestBody: {
-      content: {
-        "application/json": {
-          /** Format: email */
-          email: string;
-          /** Format: password */
-          password: string;
+    deactivateStaffAccount: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-Staff-Request": components["parameters"]["StaffRequestHeader"];
+            };
+            path: {
+                id: number;
+            };
+            cookie?: never;
         };
-      };
+        requestBody?: never;
+        responses: {
+            /** @description Staff account deactivated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid staff session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Manager access or CSRF check failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Staff account not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Self-deactivation or last active manager conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
     };
-    responses: {
-      /** @description MFA challenge created */
-      200: {
-        headers: {
-          [name: string]: unknown;
+    startStaffLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        content: {
-          "application/json": components["schemas"]["StaffLoginChallenge"];
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: email */
+                    email: string;
+                    /** Format: password */
+                    password: string;
+                };
+            };
         };
-      };
-      /** @description Invalid request */
-      400: {
-        headers: {
-          [name: string]: unknown;
+        responses: {
+            /** @description MFA challenge created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffLoginChallenge"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid credentials */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Login rate limit reached */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
-        content?: never;
-      };
-      /** @description Invalid credentials */
-      401: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description Login rate limit reached */
-      429: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
     };
-  };
-  completeStaffLogin: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
+    completeStaffLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    challenge: string;
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Session established; response includes Set-Cookie */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffLoginResult"];
+                };
+            };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid or expired challenge */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
     };
-    requestBody: {
-      content: {
-        "application/json": {
-          challenge: string;
-          code: string;
+    logoutStaff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
+        requestBody?: never;
+        responses: {
+            /** @description Session revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Missing or invalid staff session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description CSRF origin check failed */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
     };
-    responses: {
-      /** @description Session established; response includes Set-Cookie */
-      200: {
-        headers: {
-          [name: string]: unknown;
+    getStaffSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        content: {
-          "application/json": components["schemas"]["StaffLoginResult"];
+        requestBody?: never;
+        responses: {
+            /** @description Current staff account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffSession"];
+                };
+            };
+            /** @description Missing or invalid staff session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
-      };
-      /** @description Invalid request */
-      400: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description Invalid or expired challenge */
-      401: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
     };
-  };
-  logoutStaff: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
+    startStaffEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    invitation_token: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Enrollment challenge and authenticator secret */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffEnrollmentChallenge"];
+                };
+            };
+            /** @description Invitation invalid or expired */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
     };
-    requestBody?: never;
-    responses: {
-      /** @description Session revoked */
-      204: {
-        headers: {
-          [name: string]: unknown;
+    completeStaffEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        content?: never;
-      };
-      /** @description Missing or invalid staff session */
-      401: {
-        headers: {
-          [name: string]: unknown;
+        requestBody: {
+            content: {
+                "application/json": {
+                    invitation_token: string;
+                    challenge: string;
+                    /** Format: password */
+                    password: string;
+                    code: string;
+                };
+            };
         };
-        content?: never;
-      };
-      /** @description CSRF origin check failed */
-      403: {
-        headers: {
-          [name: string]: unknown;
+        responses: {
+            /** @description Enrollment complete; recovery codes are returned once */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaffEnrollmentResult"];
+                };
+            };
+            /** @description Password or enrollment challenge invalid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authenticator code invalid */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
-        content?: never;
-      };
     };
-  };
 }

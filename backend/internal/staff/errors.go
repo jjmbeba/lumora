@@ -17,6 +17,7 @@ var (
 	ErrInvitationEmailClaimLost = errors.New("staff invitation email claim was lost")
 	ErrInvitationExpired        = errors.New("staff invitation has expired")
 	ErrInvalidStaffEnrollment   = errors.New("invalid staff invitation enrollment")
+	ErrCannotDeactivateSelf     = errors.New("cannot deactivate your own staff account")
 	ErrLastActiveManager        = errors.New("cannot deactivate the last active manager")
 	ErrManagerUnavailable       = errors.New("staff manager is unavailable")
 	ErrStaffAccountNotFound     = errors.New("staff account not found")

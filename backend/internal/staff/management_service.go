@@ -40,6 +40,9 @@ func (s *ManagementService) DeactivateAccount(ctx context.Context, managerID, ac
 	if managerID <= 0 || accountID <= 0 {
 		return ErrInvalidAccountID
 	}
+	if managerID == accountID {
+		return ErrCannotDeactivateSelf
+	}
 
 	return s.store.DeactivateAccount(ctx, managerID, accountID)
 }
