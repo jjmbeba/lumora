@@ -53,6 +53,18 @@ jobs:
           cache: true
           cache-dependency-path: backend/go.sum
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Frontend checks
+        run: |
+          bun install --frozen-lockfile
+          bun run lint
+          bun run build
+        working-directory: frontend
+
       - name: Static checks
         run: |
           unformatted=$(gofmt -l $(find . -name '*.go' -type f))
