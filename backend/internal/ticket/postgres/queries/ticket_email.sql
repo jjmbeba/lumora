@@ -1,9 +1,13 @@
 -- name: LoadTicketEmailItems :many
-SELECT b.booking_reference, s.label AS seat_label, t.seat_id,
+SELECT b.booking_reference, m.name AS movie_title, screening.start_time,
+       auditorium.name AS auditorium_name, s.label AS seat_label, t.seat_id,
        t.credential_digest, t.credential_ciphertext, t.credential_key_version
 FROM bookings AS b
 JOIN tickets AS t ON t.booking_id = b.id
 JOIN seats AS s ON s.id = t.seat_id
+JOIN screenings AS screening ON screening.id = b.screening_id
+JOIN movies AS m ON m.id = screening.movie_id
+JOIN auditoriums AS auditorium ON auditorium.id = screening.auditorium_id
 WHERE b.id = $1
 ORDER BY t.seat_id;
 

@@ -83,7 +83,19 @@ func (s *EmailOutboxStore) LoadTicketEmail(ctx context.Context, job ticket.Ticke
 		if email.BookingReference != "" && email.BookingReference != bookingReference {
 			return ticket.TicketEmail{}, fmt.Errorf("booking reference changed while loading booking %d", job.BookingID)
 		}
+		if email.MovieTitle != "" && email.MovieTitle != row.MovieTitle {
+			return ticket.TicketEmail{}, fmt.Errorf("movie title changed while loading booking %d", job.BookingID)
+		}
+		if !email.ScreeningAt.IsZero() && !email.ScreeningAt.Equal(row.StartTime) {
+			return ticket.TicketEmail{}, fmt.Errorf("screening time changed while loading booking %d", job.BookingID)
+		}
+		if email.AuditoriumName != "" && email.AuditoriumName != row.AuditoriumName {
+			return ticket.TicketEmail{}, fmt.Errorf("auditorium changed while loading booking %d", job.BookingID)
+		}
 		email.BookingReference = bookingReference
+		email.MovieTitle = row.MovieTitle
+		email.ScreeningAt = row.StartTime
+		email.AuditoriumName = row.AuditoriumName
 
 		value, err := s.cipher.Reveal(job.BookingID, seatID, credential)
 		if err != nil {

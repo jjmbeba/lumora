@@ -20,12 +20,19 @@ import (
 )
 
 func TestSendVerificationCodeBuildsResendRequest(t *testing.T) {
+	type attachment struct {
+		Filename    string `json:"filename"`
+		ContentType string `json:"content_type"`
+		ContentID   string `json:"content_id"`
+		Content     []int  `json:"content"`
+	}
 	var got struct {
-		From    string   `json:"from"`
-		To      []string `json:"to"`
-		Subject string   `json:"subject"`
-		Text    string   `json:"text"`
-		HTML    string   `json:"html"`
+		From        string       `json:"from"`
+		To          []string     `json:"to"`
+		Subject     string       `json:"subject"`
+		Text        string       `json:"text"`
+		HTML        string       `json:"html"`
+		Attachments []attachment `json:"attachments"`
 	}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Method != http.MethodPost || r.URL.Path != "/emails" {
@@ -55,6 +62,12 @@ func TestSendVerificationCodeBuildsResendRequest(t *testing.T) {
 	}
 	if got.Subject != "Your booking verification code" {
 		t.Errorf("subject = %q, want booking verification subject", got.Subject)
+	}
+	if len(got.Attachments) != 1 || got.Attachments[0].ContentID != "lumora-mark" {
+		t.Fatalf("attachments = %#v, want inline Lumora mark", got.Attachments)
+	}
+	if !strings.Contains(got.HTML, "cid:lumora-mark") {
+		t.Error("HTML body does not reference the inline Lumora mark")
 	}
 	for name, body := range map[string]string{"text": got.Text, "html": got.HTML} {
 		if !strings.Contains(body, "004281") {
@@ -156,10 +169,10 @@ func TestSendTicketEmailEmbedsQRsAndUsesIdempotencyKey(t *testing.T) {
 	if strings.Contains(got.Text, "opaque-ticket-value") {
 		t.Errorf("plain-text body exposed a ticket credential: %q", got.Text)
 	}
-	if len(got.Attachments) != 2 {
-		t.Fatalf("attachment count = %d, want 2", len(got.Attachments))
+	if len(got.Attachments) != 3 {
+		t.Fatalf("attachment count = %d, want 2 ticket QR images and the Lumora mark", len(got.Attachments))
 	}
-	for i, gotAttachment := range got.Attachments {
+	for i, gotAttachment := range got.Attachments[:2] {
 		if gotAttachment.ContentType != "image/png" || gotAttachment.ContentID != fmt.Sprintf("ticket-qr-%d", i+1) {
 			t.Errorf("attachment %d metadata = %q/%q", i+1, gotAttachment.ContentType, gotAttachment.ContentID)
 		}
@@ -169,6 +182,13 @@ func TestSendTicketEmailEmbedsQRsAndUsesIdempotencyKey(t *testing.T) {
 		if !strings.Contains(got.HTML, "cid:"+gotAttachment.ContentID) {
 			t.Errorf("HTML body does not reference inline attachment %q", gotAttachment.ContentID)
 		}
+	}
+	logo := got.Attachments[2]
+	if logo.Filename != "lumora-mark.png" || logo.ContentType != "image/png" || logo.ContentID != "lumora-mark" {
+		t.Errorf("logo attachment metadata = %#v", logo)
+	}
+	if !strings.Contains(got.HTML, "cid:lumora-mark") {
+		t.Error("HTML body does not reference the inline Lumora mark")
 	}
 }
 

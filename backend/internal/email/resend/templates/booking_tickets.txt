@@ -1,0 +1,14 @@
+LUMORA · YOUR TICKETS
+
+Booking confirmed: {{if .MovieTitle}}{{.MovieTitle}}{{else}}Your cinema tickets{{end}}
+{{if .ScreeningAt}}{{.ScreeningAt}}
+{{end}}{{if .AuditoriumName}}{{.AuditoriumName}}
+{{end}}
+Booking reference: {{.BookingReference}}
+
+Your tickets ({{len .Tickets}}):
+{{if .ShowInlineQRs}}
+{{range .Tickets}}- Seat {{.SeatLabel}} — QR ticket attached as {{.AttachmentName}}
+{{end}}{{else}}QR tickets are attached, one for each seat: {{.SeatLabels}}.
+{{end}}
+Each seat has its own ticket. Keep each QR code ready to be scanned at the cinema, or share that guest’s ticket with them.
