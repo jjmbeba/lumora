@@ -22,7 +22,7 @@ export const useStaffAccountsQuery = (params: StaffAccountSearch) =>
       if (params.search) {
         query.set("search", params.search);
       }
-      return apiRequest<StaffAccountPage>(`/staff/accounts?${query}`);
+      return apiRequest<StaffAccountPage>(`/api/v1/staff/accounts?${query}`);
     },
     retry: (failureCount, error) =>
       error instanceof ApiError && error.status < 500

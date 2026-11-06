@@ -105,7 +105,7 @@ func TestEmailVerificationRoutesShareLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < MaxNumberRequestsPerHour; i++ {
-		request := httptest.NewRequest(http.MethodPost, "/bookings/bk-123/email-verification-challenges", nil)
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/bk-123/email-verification-challenges", nil)
 		request.RemoteAddr = "192.0.2.1:1234"
 		response := httptest.NewRecorder()
 		mux.ServeHTTP(response, request)
@@ -113,7 +113,7 @@ func TestEmailVerificationRoutesShareLimit(t *testing.T) {
 			t.Fatalf("challenge %d status = %d, want 202", i+1, response.Code)
 		}
 	}
-	request := httptest.NewRequest(http.MethodPost, "/bookings/bk-123/email-verifications", strings.NewReader(`{"code":"123456"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/bk-123/email-verifications", strings.NewReader(`{"code":"123456"}`))
 	request.RemoteAddr = "192.0.2.1:5678"
 	response := httptest.NewRecorder()
 	mux.ServeHTTP(response, request)

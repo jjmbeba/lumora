@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-  "/staff/accounts": {
+  "/api/v1/staff/accounts": {
     parameters: {
       query?: never;
       header?: never;
@@ -21,7 +21,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/staff/auth/login": {
+  "/api/v1/staff/auth/login": {
     parameters: {
       query?: never;
       header?: never;
@@ -38,7 +38,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/staff/auth/mfa": {
+  "/api/v1/staff/auth/mfa": {
     parameters: {
       query?: never;
       header?: never;
@@ -55,7 +55,7 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
-  "/staff/auth/logout": {
+  "/api/v1/staff/auth/logout": {
     parameters: {
       query?: never;
       header?: never;

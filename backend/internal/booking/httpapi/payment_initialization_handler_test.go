@@ -48,7 +48,7 @@ func TestPaymentInitializationStatusHandlerReturnsCurrentState(t *testing.T) {
 			reader := &paymentInitializationHTTPStoreFake{initialization: test.initialization}
 			verificationStore := &emailVerificationHTTPStoreFake{}
 			handler := newPaymentInitializationStatusTestHandler(t, reader, verificationStore)
-			request := httptest.NewRequest(http.MethodGet, "/bookings/bk-test/payment-initialization", nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/bk-test/payment-initialization", nil)
 			request.SetPathValue("reference", "bk-test")
 			request.Header.Set("Authorization", "Bearer valid-token")
 			response := httptest.NewRecorder()
@@ -95,7 +95,7 @@ func TestPaymentInitializationStatusHandlerRequiresBookingToken(t *testing.T) {
 			reader := &paymentInitializationHTTPStoreFake{}
 			verificationStore := &emailVerificationHTTPStoreFake{validateErr: test.validationErr}
 			handler := newPaymentInitializationStatusTestHandler(t, reader, verificationStore)
-			request := httptest.NewRequest(http.MethodGet, "/bookings/bk-other/payment-initialization", nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/bk-other/payment-initialization", nil)
 			request.SetPathValue("reference", "bk-other")
 			if test.authorization != "" {
 				request.Header.Set("Authorization", test.authorization)
@@ -126,7 +126,7 @@ func TestPaymentInitializationStatusHandlerMapsReadErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			reader := &paymentInitializationHTTPStoreFake{readErr: test.readErr}
 			handler := newPaymentInitializationStatusTestHandler(t, reader, &emailVerificationHTTPStoreFake{})
-			request := httptest.NewRequest(http.MethodGet, "/bookings/bk-test/payment-initialization", nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/bk-test/payment-initialization", nil)
 			request.SetPathValue("reference", "bk-test")
 			request.Header.Set("Authorization", "Bearer valid-token")
 			response := httptest.NewRecorder()

@@ -6,7 +6,7 @@ info:
 servers:
   - url: /
 paths:
-  /staff/accounts:
+  /api/v1/staff/accounts:
     get:
       operationId: listStaffAccounts
       summary: Search and paginate staff accounts
@@ -35,7 +35,7 @@ paths:
           description: Missing or invalid staff session
         '403':
           description: The signed-in staff member is not a manager
-  /staff/auth/login:
+  /api/v1/staff/auth/login:
     post:
       operationId: startStaffLogin
       summary: Verify staff password and begin MFA
@@ -59,7 +59,7 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Invalid credentials }
         '429': { description: Login rate limit reached }
-  /staff/auth/mfa:
+  /api/v1/staff/auth/mfa:
     post:
       operationId: completeStaffLogin
       summary: Complete MFA and set the staff session cookie
@@ -82,7 +82,7 @@ paths:
                 $ref: '#/components/schemas/StaffLoginResult'
         '400': { description: Invalid request }
         '401': { description: Invalid or expired challenge }
-  /staff/auth/logout:
+  /api/v1/staff/auth/logout:
     post:
       operationId: logoutStaff
       summary: Revoke the current staff session

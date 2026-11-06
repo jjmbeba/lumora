@@ -1,13 +1,18 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowUpRight, Clapperboard } from "lucide-react";
 
+import { ThemeToggle } from "@/components/theme-toggle";
+
 export const HomePage = () => (
   <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-8 sm:px-10">
-    <header className="border-border flex items-center gap-3 border-b pb-6">
-      <span className="bg-primary text-primary-foreground grid size-10 place-items-center rounded-xl">
-        <Clapperboard aria-hidden="true" className="size-5" />
-      </span>
-      <span className="text-lg font-semibold tracking-tight">Lumora</span>
+    <header className="border-border flex items-center justify-between gap-3 border-b pb-6">
+      <div className="flex items-center gap-3">
+        <span className="bg-primary text-primary-foreground grid size-10 place-items-center rounded-xl">
+          <Clapperboard aria-hidden="true" className="size-5" />
+        </span>
+        <span className="text-lg font-semibold tracking-tight">Lumora</span>
+      </div>
+      <ThemeToggle />
     </header>
     <section className="grid flex-1 content-center gap-8 py-16 lg:grid-cols-[1.2fr_0.8fr] lg:items-center">
       <div className="max-w-2xl">

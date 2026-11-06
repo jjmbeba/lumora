@@ -18,8 +18,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/staff": { target: "http://localhost:8081", changeOrigin: true },
-      "/bookings": { target: "http://localhost:8081", changeOrigin: true },
+      "/api/v1": { target: "http://localhost:8081", changeOrigin: true },
     },
   },
 });

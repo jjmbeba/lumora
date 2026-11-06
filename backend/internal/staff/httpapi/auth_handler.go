@@ -357,11 +357,11 @@ func RegisterAuthRoutes(mux *http.ServeMux, handler *AuthHandler) error {
 		return errors.New("staff auth routes require a mux and handler")
 	}
 
-	mux.HandleFunc("POST /staff/auth/login", handler.StartLogin)
-	mux.HandleFunc("POST /staff/auth/mfa", handler.CompleteLogin)
-	mux.Handle("POST /staff/auth/logout", handler.RequireCSRF(http.HandlerFunc(handler.Logout)))
-	mux.HandleFunc("POST /staff/invitations/setup/start", handler.StartInvitationEnrollment)
-	mux.HandleFunc("POST /staff/invitations/setup/complete", handler.CompleteInvitationEnrollment)
+	mux.HandleFunc("POST /api/v1/staff/auth/login", handler.StartLogin)
+	mux.HandleFunc("POST /api/v1/staff/auth/mfa", handler.CompleteLogin)
+	mux.Handle("POST /api/v1/staff/auth/logout", handler.RequireCSRF(http.HandlerFunc(handler.Logout)))
+	mux.HandleFunc("POST /api/v1/staff/invitations/setup/start", handler.StartInvitationEnrollment)
+	mux.HandleFunc("POST /api/v1/staff/invitations/setup/complete", handler.CompleteInvitationEnrollment)
 
 	return nil
 }

@@ -29,7 +29,7 @@ func TestBookingDetailsHandlerRequiresValidBookingBearerToken(t *testing.T) {
 			store := &stubBookingStore{}
 			verificationStore := &emailVerificationHTTPStoreFake{validateErr: test.validationErr}
 			handler := newBookingDetailsTestHandler(t, store, verificationStore)
-			request := httptest.NewRequest(http.MethodGet, "/bookings/bk-test", nil)
+			request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/bk-test", nil)
 			request.SetPathValue("reference", "bk-test")
 			if test.authorization != "" {
 				request.Header.Set("Authorization", test.authorization)
@@ -73,7 +73,7 @@ func TestBookingDetailsHandlerReturnsDetailsAfterTokenValidation(t *testing.T) {
 	store := &stubBookingStore{details: want}
 	verificationStore := &emailVerificationHTTPStoreFake{}
 	handler := newBookingDetailsTestHandler(t, store, verificationStore)
-	request := httptest.NewRequest(http.MethodGet, "/bookings/bk-test", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/bk-test", nil)
 	request.SetPathValue("reference", "bk-test")
 	request.Header.Set("Authorization", "Bearer opaque-token-value")
 	response := httptest.NewRecorder()
@@ -111,7 +111,7 @@ func TestBookingDetailsHandlerReturnsDetailsAfterTokenValidation(t *testing.T) {
 func TestBookingDetailsHandlerMapsMissingBooking(t *testing.T) {
 	store := &stubBookingStore{detailsErr: booking.ErrBookingNotFound}
 	handler := newBookingDetailsTestHandler(t, store, &emailVerificationHTTPStoreFake{})
-	request := httptest.NewRequest(http.MethodGet, "/bookings/bk-missing", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/bk-missing", nil)
 	request.SetPathValue("reference", "bk-missing")
 	request.Header.Set("Authorization", "Bearer valid-token")
 	response := httptest.NewRecorder()
@@ -127,7 +127,7 @@ func TestBookingDetailsHandlerMapsUnexpectedTokenStoreFailure(t *testing.T) {
 	storeFailure := errors.New("database unavailable")
 	verificationStore := &emailVerificationHTTPStoreFake{validateErr: storeFailure}
 	handler := newBookingDetailsTestHandler(t, &stubBookingStore{}, verificationStore)
-	request := httptest.NewRequest(http.MethodGet, "/bookings/bk-test", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/bk-test", nil)
 	request.SetPathValue("reference", "bk-test")
 	request.Header.Set("Authorization", "Bearer token")
 	response := httptest.NewRecorder()

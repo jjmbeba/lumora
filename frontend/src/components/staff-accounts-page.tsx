@@ -3,6 +3,8 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { LogOut, Search } from "lucide-react";
 import { useDeferredValue, useEffect } from "react";
 
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Input } from "@/components/ui/input";
 import { useLogoutStaffMutation } from "@/features/staff/mutations/use-staff-auth-mutations";
 import { useStaffAccountsQuery } from "@/features/staff/queries/use-staff-accounts";
 import { ApiError } from "@/lib/api";
@@ -199,23 +201,26 @@ export const StaffAccountsPage = () => {
             Staff accounts
           </h1>
         </div>
-        <button
-          className="border-border hover:bg-muted inline-flex h-10 items-center gap-2 rounded-lg border px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={logoutMutation.isPending}
-          onClick={async () => {
-            try {
-              await logoutMutation.mutateAsync();
-              queryClient.clear();
-              await navigate({ to: "/staff/login" });
-            } catch {
-              // The mutation reports request failures through Sonner.
-            }
-          }}
-          type="button"
-        >
-          <LogOut aria-hidden="true" className="size-4" />
-          {logoutMutation.isPending ? "Signing out…" : "Sign out"}
-        </button>
+        <div className="flex items-center gap-3">
+          <ThemeToggle />
+          <button
+            className="border-border hover:bg-muted inline-flex h-10 items-center gap-2 rounded-lg border px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={logoutMutation.isPending}
+            onClick={async () => {
+              try {
+                await logoutMutation.mutateAsync();
+                queryClient.clear();
+                await navigate({ to: "/staff/login" });
+              } catch {
+                // The mutation reports request failures through Sonner.
+              }
+            }}
+            type="button"
+          >
+            <LogOut aria-hidden="true" className="size-4" />
+            {logoutMutation.isPending ? "Signing out…" : "Sign out"}
+          </button>
+        </div>
       </header>
 
       {isForbidden ? (
@@ -240,8 +245,8 @@ export const StaffAccountsPage = () => {
                 aria-hidden="true"
                 className="text-muted-foreground absolute top-1/2 left-3 size-4 -translate-y-1/2"
               />
-              <input
-                className="border-border bg-background focus-visible:ring-ring h-10 w-full rounded-lg border pr-3 pl-9 text-sm outline-none focus-visible:ring-2"
+              <Input
+                className="bg-background h-10 rounded-lg pr-3 pl-9 text-sm"
                 onChange={(event) =>
                   navigate({
                     search: (previous) => ({

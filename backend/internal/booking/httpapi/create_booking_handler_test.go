@@ -32,7 +32,7 @@ func TestCreateBookingHandlerStartsBookingAndPayment(t *testing.T) {
 		},
 	}}
 	handler := newTestCreateBookingHandler(t, starter)
-	request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(validCreateBookingJSON))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings", strings.NewReader(validCreateBookingJSON))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "booking-request-123")
 	response := httptest.NewRecorder()
@@ -79,7 +79,7 @@ func TestCreateBookingHandlerStartsBookingAndPayment(t *testing.T) {
 func TestCreateBookingHandlerRejectsMalformedJSONBeforeCheckout(t *testing.T) {
 	starter := &checkoutStarterFake{}
 	handler := newTestCreateBookingHandler(t, starter)
-	request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(`{"screening_id":`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings", strings.NewReader(`{"screening_id":`))
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -95,7 +95,7 @@ func TestCreateBookingHandlerRejectsMalformedJSONBeforeCheckout(t *testing.T) {
 func TestCreateBookingHandlerRejectsInvalidPaymentMethodBeforeCheckout(t *testing.T) {
 	starter := &checkoutStarterFake{}
 	handler := newTestCreateBookingHandler(t, starter)
-	request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(strings.Replace(validCreateBookingJSON, `"CARD"`, `"BITCOIN"`, 1)))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings", strings.NewReader(strings.Replace(validCreateBookingJSON, `"CARD"`, `"BITCOIN"`, 1)))
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)
@@ -127,7 +127,7 @@ func TestCreateBookingHandlerMapsCheckoutErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			starter := &checkoutStarterFake{err: test.err}
 			handler := newTestCreateBookingHandler(t, starter)
-			request := httptest.NewRequest(http.MethodPost, "/bookings", strings.NewReader(validCreateBookingJSON))
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings", strings.NewReader(validCreateBookingJSON))
 			request.Header.Set("Idempotency-Key", "booking-request-123")
 			response := httptest.NewRecorder()
 
@@ -146,7 +146,7 @@ func TestCreateBookingHandlerMapsCheckoutErrors(t *testing.T) {
 func TestCreateBookingHandlerRejectsUnsupportedMethod(t *testing.T) {
 	starter := &checkoutStarterFake{}
 	handler := newTestCreateBookingHandler(t, starter)
-	request := httptest.NewRequest(http.MethodGet, "/bookings", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/bookings", nil)
 	response := httptest.NewRecorder()
 
 	handler.ServeHTTP(response, request)

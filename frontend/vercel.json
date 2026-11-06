@@ -1,0 +1,6 @@
+{
+  "rewrites": [
+    { "source": "/staff/login", "destination": "/index.html" },
+    { "source": "/staff/accounts", "destination": "/index.html" }
+  ]
+}

@@ -116,7 +116,9 @@ func run() error {
 		return fmt.Errorf("read authenticator code: %w", err)
 	}
 	code = strings.TrimSpace(code)
-	result, err := authService.BootstrapFirstOwner(ctx, staff.BootstrapOwnerRequest{
+	bootstrapCtx, cancelBootstrap := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelBootstrap()
+	result, err := authService.BootstrapFirstOwner(bootstrapCtx, staff.BootstrapOwnerRequest{
 		Email: email, DisplayName: displayName, Password: password,
 		TOTPSecret: secret, TOTPCode: code,
 	})
