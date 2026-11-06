@@ -46,7 +46,7 @@ func TestRequestCodeReturnsSameGenericResponseWhenNoEmailIsSent(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			handler := newEmailVerificationTestHandler(t, test.store, test.send)
-			request := httptest.NewRequest(http.MethodPost, "/bookings/bk-123/email-verification-challenges", nil)
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/bk-123/email-verification-challenges", nil)
 			request.SetPathValue("reference", "bk-123")
 			response := httptest.NewRecorder()
 
@@ -65,7 +65,7 @@ func TestRequestCodeReturnsSameGenericResponseWhenNoEmailIsSent(t *testing.T) {
 func TestVerifyCodeReturnsBookingToken(t *testing.T) {
 	store := &emailVerificationHTTPStoreFake{}
 	handler := newEmailVerificationTestHandler(t, store, &emailVerificationHTTPSenderFake{})
-	request := httptest.NewRequest(http.MethodPost, "/bookings/bk-123/email-verifications", strings.NewReader(`{"code":"004281"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/bk-123/email-verifications", strings.NewReader(`{"code":"004281"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetPathValue("reference", "bk-123")
 	response := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestVerifyCodeRejectsMalformedJSONAndInvalidCode(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &emailVerificationHTTPStoreFake{}
 			handler := newEmailVerificationTestHandler(t, store, &emailVerificationHTTPSenderFake{})
-			request := httptest.NewRequest(http.MethodPost, "/bookings/bk-123/email-verifications", strings.NewReader(test.body))
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/bk-123/email-verifications", strings.NewReader(test.body))
 			request.SetPathValue("reference", "bk-123")
 			response := httptest.NewRecorder()
 
@@ -131,7 +131,7 @@ func TestVerifyCodeRejectsMalformedJSONAndInvalidCode(t *testing.T) {
 func TestVerifyCodeMapsRejectedCodeToUnauthorized(t *testing.T) {
 	store := &emailVerificationHTTPStoreFake{verifyErr: booking.ErrEmailCodeRejected}
 	handler := newEmailVerificationTestHandler(t, store, &emailVerificationHTTPSenderFake{})
-	request := httptest.NewRequest(http.MethodPost, "/bookings/bk-123/email-verifications", strings.NewReader(`{"code":"004281"}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/bk-123/email-verifications", strings.NewReader(`{"code":"004281"}`))
 	request.SetPathValue("reference", "bk-123")
 	response := httptest.NewRecorder()
 

@@ -15,6 +15,15 @@ func RequireEnv(key string) (string, error) {
 	return value, nil
 }
 
+// ResendFromAddress reads the shared sender setting. RESEND_FROM_EMAIL remains
+// accepted for compatibility with older worker deployments.
+func ResendFromAddress() (string, error) {
+	if value, ok := os.LookupEnv("RESEND_EMAIL_FROM"); ok && value != "" {
+		return value, nil
+	}
+	return RequireEnv("RESEND_FROM_EMAIL")
+}
+
 func Duration(key string, fallback time.Duration) (time.Duration, error) {
 	value, ok := os.LookupEnv(key)
 	if !ok || value == "" {

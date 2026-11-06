@@ -11,6 +11,9 @@ import (
 type TicketEmail struct {
 	To               string
 	BookingReference string
+	MovieTitle       string
+	ScreeningAt      time.Time
+	AuditoriumName   string
 	IdempotencyKey   string
 	Tickets          []TicketEmailItem
 }

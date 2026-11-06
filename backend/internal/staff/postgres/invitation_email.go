@@ -80,7 +80,8 @@ func (s *InvitationEmailOutboxStore) LoadInvitationEmail(ctx context.Context, jo
 		return staff.InvitationEmailDelivery{}, errors.New("staff invitation email token ciphertext is unavailable")
 	}
 	return staff.InvitationEmailDelivery{
-		Email: row.Email, TokenCiphertext: append([]byte(nil), row.TokenCiphertext...),
+		Email: row.Email, DisplayName: row.DisplayName, Role: staff.Role(row.Role),
+		TokenCiphertext: append([]byte(nil), row.TokenCiphertext...),
 		TokenKeyVersion: row.TokenKeyVersion.Int16, ExpiresAt: row.ExpiresAt,
 	}, nil
 }

@@ -135,7 +135,7 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 	}
 
 	loginResponse := httptest.NewRecorder()
-	mux.ServeHTTP(loginResponse, jsonRequest(t, http.MethodPost, "/staff/auth/login", map[string]string{
+	mux.ServeHTTP(loginResponse, jsonRequest(t, http.MethodPost, "/api/v1/staff/auth/login", map[string]string{
 		"email": strings.ToUpper(staffHTTPTestEmail), "password": staffHTTPTestPassword,
 	}))
 	if loginResponse.Code != http.StatusOK {
@@ -160,7 +160,7 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 	}
 
 	mfaResponse := httptest.NewRecorder()
-	mux.ServeHTTP(mfaResponse, jsonRequest(t, http.MethodPost, "/staff/auth/mfa", map[string]string{
+	mux.ServeHTTP(mfaResponse, jsonRequest(t, http.MethodPost, "/api/v1/staff/auth/mfa", map[string]string{
 		"challenge": challenge.Challenge, "code": totpCodeForTest(secret, time.Now()),
 	}))
 	if mfaResponse.Code != http.StatusOK {
@@ -202,13 +202,13 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 	}
 
 	directoryUnauthenticated := httptest.NewRecorder()
-	mux.ServeHTTP(directoryUnauthenticated, httptest.NewRequest(http.MethodGet, "/staff/accounts", nil))
+	mux.ServeHTTP(directoryUnauthenticated, httptest.NewRequest(http.MethodGet, "/api/v1/staff/accounts", nil))
 	if directoryUnauthenticated.Code != http.StatusUnauthorized {
 		t.Fatalf("staff directory without a session status = %d, want %d", directoryUnauthenticated.Code, http.StatusUnauthorized)
 	}
 
 	directoryResponse := httptest.NewRecorder()
-	directoryRequest := httptest.NewRequest(http.MethodGet, "/staff/accounts?page=1&page_size=5&search=STAFF-HTTP-AUTH", nil)
+	directoryRequest := httptest.NewRequest(http.MethodGet, "/api/v1/staff/accounts?page=1&page_size=5&search=STAFF-HTTP-AUTH", nil)
 	directoryRequest.AddCookie(sessionCookie)
 	mux.ServeHTTP(directoryResponse, directoryRequest)
 	if directoryResponse.Code != http.StatusOK {
@@ -243,7 +243,7 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 		t.Fatalf("create scanner session fixture: %v", err)
 	}
 	forbiddenDirectory := httptest.NewRecorder()
-	forbiddenRequest := httptest.NewRequest(http.MethodGet, "/staff/accounts", nil)
+	forbiddenRequest := httptest.NewRequest(http.MethodGet, "/api/v1/staff/accounts", nil)
 	forbiddenRequest.AddCookie(scannerCookie)
 	mux.ServeHTTP(forbiddenDirectory, forbiddenRequest)
 	if forbiddenDirectory.Code != http.StatusForbidden {
@@ -251,7 +251,7 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 	}
 
 	invalidPage := httptest.NewRecorder()
-	invalidPageRequest := httptest.NewRequest(http.MethodGet, "/staff/accounts?page_size=101", nil)
+	invalidPageRequest := httptest.NewRequest(http.MethodGet, "/api/v1/staff/accounts?page_size=101", nil)
 	invalidPageRequest.AddCookie(sessionCookie)
 	mux.ServeHTTP(invalidPage, invalidPageRequest)
 	if invalidPage.Code != http.StatusBadRequest {
@@ -259,7 +259,7 @@ func TestAuthHTTPFlowPostgres(t *testing.T) {
 	}
 
 	logout := httptest.NewRecorder()
-	logoutRequest := httptest.NewRequest(http.MethodPost, "/staff/auth/logout", nil)
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/api/v1/staff/auth/logout", nil)
 	logoutRequest.AddCookie(sessionCookie)
 	logoutRequest.Header.Set("Origin", "https://staff.example.test")
 	logoutRequest.Header.Set("X-Staff-Request", "1")

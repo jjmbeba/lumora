@@ -47,7 +47,7 @@ func run(ctx context.Context, dsn, apiKey, fromAddress, setupURL string, cipher 
 		return err
 	}
 
-	sender, err := resend.NewResendSender(apiKey, fromAddress)
+	sender, err := resend.NewResendSender(apiKey, fromAddress, resend.Config{Environment: os.Getenv("APP_ENV"), TestRecipient: os.Getenv("RESEND_TEST_RECIPIENT")})
 	if err != nil {
 		return err
 	}
@@ -73,7 +73,7 @@ func runMain() error {
 		return err
 	}
 
-	fromAddress, err := config.RequireEnv("RESEND_FROM_EMAIL")
+	fromAddress, err := config.ResendFromAddress()
 	if err != nil {
 		return err
 	}

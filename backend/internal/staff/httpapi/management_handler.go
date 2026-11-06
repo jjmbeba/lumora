@@ -77,6 +77,8 @@ func (h *ManagementHandler) DeactivateAccount(w http.ResponseWriter, r *http.Req
 		http.Error(w, "staff account not found", http.StatusNotFound)
 	case errors.Is(err, staff.ErrLastActiveManager):
 		http.Error(w, "cannot deactivate the last active manager", http.StatusConflict)
+	case errors.Is(err, staff.ErrCannotDeactivateSelf):
+		http.Error(w, "cannot deactivate your own staff account", http.StatusConflict)
 	case errors.Is(err, staff.ErrManagerUnavailable):
 		http.Error(w, "staff manager is unavailable", http.StatusForbidden)
 	default:
@@ -226,9 +228,9 @@ func RegisterManagementRoutes(mux *http.ServeMux, authHandler *AuthHandler, hand
 		return errors.New("staff management routes require a mux, auth handler, and management handler")
 	}
 
-	mux.Handle("POST /staff/accounts/{id}/deactivation", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.DeactivateAccount))))
-	mux.Handle("POST /staff/accounts/{id}/invitation", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.ResendInvitation))))
-	mux.Handle("POST /staff/accounts", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.CreateInvitation))))
-	mux.Handle("GET /staff/accounts", authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.ListAccounts)))
+	mux.Handle("POST /api/v1/staff/accounts/{id}/deactivation", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.DeactivateAccount))))
+	mux.Handle("POST /api/v1/staff/accounts/{id}/invitation", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.ResendInvitation))))
+	mux.Handle("POST /api/v1/staff/accounts", authHandler.RequireCSRF(authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.CreateInvitation))))
+	mux.Handle("GET /api/v1/staff/accounts", authHandler.RequireRole(staff.RoleManager, http.HandlerFunc(handler.ListAccounts)))
 	return nil
 }

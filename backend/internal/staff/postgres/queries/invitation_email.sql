@@ -43,7 +43,8 @@ WHERE eo.id = candidate.id
 RETURNING eo.id, eo.staff_invitation_id, eo.recipient_email, eo.event_key, eo.attempt_count;
 
 -- name: LoadStaffInvitationEmail :one
-SELECT sa.email, si.token_ciphertext, si.token_key_version, si.expires_at
+SELECT sa.email, sa.display_name, sa.role::text AS role,
+       si.token_ciphertext, si.token_key_version, si.expires_at
 FROM email_outbox AS eo
 JOIN staff_invitations AS si ON si.id = eo.staff_invitation_id
 JOIN staff_accounts AS sa ON sa.id = si.staff_account_id

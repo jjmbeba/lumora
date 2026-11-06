@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Your cinema tickets</title>
+  </head>
+  <body style="margin: 0; padding: 0; background-color: #f3f8f7; color: #132b2a; font-family: Arial, Helvetica, sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #f3f8f7;">
+      <tr>
+        <td align="center" style="padding: 36px 16px;">
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 600px;">
+            <tr>
+              <td style="padding: 0 0 20px;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0">
+                  <tr>
+                    <td width="38" height="38" align="center" valign="middle" style="width: 38px; height: 38px;"><img src="cid:lumora-mark" width="36" height="36" alt="Lumora" style="display: block; width: 36px; height: 36px; border: 0; border-radius: 8px;" /></td>
+                    <td style="padding-left: 11px; color: #173331; font-size: 16px; font-weight: 700; letter-spacing: 0.04em;">LUMORA<br /><span style="color: #56716f; font-size: 10px; font-weight: 600; letter-spacing: 0.16em;">YOUR TICKETS</span></td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 32px; border: 1px solid #d7e4e2; border-radius: 12px; background-color: #ffffff;">
+                <p style="margin: 0 0 8px; color: #52706d; font-size: 12px;">Booking confirmed</p>
+                <h1 style="margin: 0; color: #132b2a; font-size: 24px; line-height: 1.3; font-weight: 700;">{{if .MovieTitle}}{{.MovieTitle}}{{else}}Your cinema tickets{{end}}</h1>
+                {{if or .ScreeningAt .AuditoriumName}}
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top: 20px; border: 1px solid #d7e4e2; border-radius: 8px;">
+                  {{if .ScreeningAt}}<tr><td style="padding: 12px 14px; color: #496461; font-size: 14px;">{{.ScreeningAt}}</td></tr>{{end}}
+                  {{if .AuditoriumName}}<tr><td style="padding: 0 14px 12px; color: #496461; font-size: 14px;">{{.AuditoriumName}}</td></tr>{{end}}
+                </table>
+                {{end}}
+                <p style="margin: 18px 0 0; color: #6a807e; font-size: 12px;">Booking reference</p>
+                <p style="margin: 4px 0 0; color: #173331; font-family: 'Courier New', monospace; font-size: 15px; font-weight: 700;">{{.BookingReference}}</p>
+                <h2 style="margin: 24px 0 12px; color: #173331; font-size: 16px;">Your tickets · {{len .Tickets}}</h2>
+                {{if .ShowInlineQRs}}
+                {{range .Tickets}}
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-top: 10px; border-radius: 8px; background-color: #f3f8f7;">
+                  <tr>
+                    <td width="104" style="padding: 12px;">
+                      <img src="cid:{{.ContentID}}" width="80" height="80" alt="QR ticket for seat {{.SeatLabel}}" style="display: block; width: 80px; height: 80px; border: 1px solid #d7e4e2; border-radius: 6px; background-color: #ffffff;" />
+                    </td>
+                    <td style="padding: 12px 12px 12px 0; color: #173331; font-size: 14px;">
+                      <strong>Seat {{.SeatLabel}}</strong><br />
+                      <span style="color: #6a807e; font-size: 12px;">QR ticket attached as {{.AttachmentName}}</span>
+                    </td>
+                  </tr>
+                </table>
+                {{end}}
+                {{else}}
+                <p style="margin: 0; color: #496461; font-size: 14px; line-height: 1.6;">QR tickets are attached, one for each seat: {{.SeatLabels}}.</p>
+                {{end}}
+                <p style="margin: 20px 0 0; color: #496461; font-size: 13px; line-height: 1.6;">Each seat has its own ticket. Keep each QR code ready to be scanned at the cinema, or share that guest’s ticket with them.</p>
+              </td>
+            </tr>
+            <tr>
+              <td align="center" style="padding: 18px 8px 0; color: #708582; font-size: 11px; line-height: 1.5;">Lumora · Enjoy the show</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

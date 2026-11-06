@@ -11,7 +11,7 @@ func RegisterEmailVerificationRoutes(mux *http.ServeMux, handler *EmailVerificat
 		return errors.New("email verification routes require a mux, handler, and rate limiter")
 	}
 
-	mux.Handle("POST /bookings/{reference}/email-verification-challenges", limiter.Limit(http.HandlerFunc(handler.RequestCode)))
-	mux.Handle("POST /bookings/{reference}/email-verifications", limiter.Limit(http.HandlerFunc(handler.VerifyCode)))
+	mux.Handle("POST /api/v1/bookings/{reference}/email-verification-challenges", limiter.Limit(http.HandlerFunc(handler.RequestCode)))
+	mux.Handle("POST /api/v1/bookings/{reference}/email-verifications", limiter.Limit(http.HandlerFunc(handler.VerifyCode)))
 	return nil
 }
