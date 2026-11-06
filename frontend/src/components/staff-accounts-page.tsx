@@ -4,7 +4,32 @@ import { LogOut, Search } from "lucide-react";
 import { useDeferredValue, useEffect } from "react";
 
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useLogoutStaffMutation } from "@/features/staff/mutations/use-staff-auth-mutations";
 import { useStaffAccountsQuery } from "@/features/staff/queries/use-staff-accounts";
 import { ApiError } from "@/lib/api";
@@ -13,6 +38,12 @@ import { getErrorMessage } from "@/lib/error-message";
 const dateFormatter = new Intl.DateTimeFormat("en-KE", {
   dateStyle: "medium",
 });
+
+const statusBadgeClassName = {
+  ACTIVE: "border-primary/30 bg-primary/5 text-primary",
+  DISABLED: "border-destructive/30 bg-destructive/5 text-destructive",
+  INVITED: "border-border bg-muted text-muted-foreground",
+} as const;
 
 export const StaffAccountsPage = () => {
   const navigate = useNavigate({ from: "/staff/accounts" });
@@ -39,32 +70,67 @@ export const StaffAccountsPage = () => {
   const renderDirectoryContent = () => {
     if (accountsQuery.isPending) {
       return (
-        <output className="text-muted-foreground mt-8 text-sm">
-          Loading staff accounts…
-        </output>
+        <div
+          aria-busy="true"
+          aria-label="Loading staff accounts"
+          className="border-border mt-6 overflow-x-auto rounded-xl border"
+          role="status"
+        >
+          <span className="sr-only">Loading staff accounts</span>
+          <Table aria-hidden="true" className="min-w-155 border-collapse">
+            <TableHeader className="bg-muted/60">
+              <TableRow>
+                {["Name", "Email", "Role", "Status", "Created"].map(
+                  (heading) => (
+                    <TableHead className="px-4 py-3" key={heading}>
+                      <Skeleton className="h-4 w-16 animate-none rounded-sm" />
+                    </TableHead>
+                  )
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody className="divide-border divide-y">
+              {Array.from({ length: 4 }, (_, row) => (
+                <TableRow key={row}>
+                  {["w-32", "w-48", "w-20", "w-20", "w-28"].map(
+                    (width, column) => (
+                      <TableCell className="px-4 py-3" key={column}>
+                        <Skeleton
+                          className={`h-4 animate-none ${width} max-w-full rounded-sm`}
+                        />
+                      </TableCell>
+                    )
+                  )}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       );
     }
 
     if (accountsQuery.isError) {
       return (
-        <div
-          className="border-destructive/30 bg-destructive/5 text-destructive mt-8 rounded-lg border p-4 text-sm"
-          role="alert"
-        >
-          {getErrorMessage(
-            accountsQuery.error,
-            "The staff directory could not be loaded."
-          )}
-          <button
-            className="ml-3 font-semibold underline"
-            onClick={async () => {
-              await accountsQuery.refetch();
-            }}
-            type="button"
-          >
-            Try again
-          </button>
-        </div>
+        <Alert className="border-destructive/30 bg-destructive/5 text-destructive mt-8 rounded-lg p-4">
+          <AlertTitle className="sr-only">Staff directory error</AlertTitle>
+          <AlertDescription className="text-destructive flex flex-wrap items-center gap-3">
+            {getErrorMessage(
+              accountsQuery.error,
+              "The staff directory could not be loaded."
+            )}
+            <Button
+              className="h-auto p-0 font-semibold underline underline-offset-2"
+              variant="link"
+              size="default"
+              onClick={async () => {
+                await accountsQuery.refetch();
+              }}
+              type="button"
+            >
+              Try again
+            </Button>
+          </AlertDescription>
+        </Alert>
       );
     }
 
@@ -75,44 +141,51 @@ export const StaffAccountsPage = () => {
     return (
       <>
         <div className="border-border mt-6 overflow-x-auto rounded-xl border">
-          <table className="w-full min-w-155 border-collapse text-left text-sm">
-            <thead className="bg-muted/60 text-muted-foreground">
-              <tr>
-                <th className="px-4 py-3 font-medium" scope="col">
+          <Table className="min-w-155 border-collapse text-left text-sm">
+            <TableHeader className="bg-muted/60 text-muted-foreground">
+              <TableRow>
+                <TableHead className="px-4 py-3 font-medium" scope="col">
                   Name
-                </th>
-                <th className="px-4 py-3 font-medium" scope="col">
+                </TableHead>
+                <TableHead className="px-4 py-3 font-medium" scope="col">
                   Email
-                </th>
-                <th className="px-4 py-3 font-medium" scope="col">
+                </TableHead>
+                <TableHead className="px-4 py-3 font-medium" scope="col">
                   Role
-                </th>
-                <th className="px-4 py-3 font-medium" scope="col">
+                </TableHead>
+                <TableHead className="px-4 py-3 font-medium" scope="col">
                   Status
-                </th>
-                <th className="px-4 py-3 font-medium" scope="col">
+                </TableHead>
+                <TableHead className="px-4 py-3 font-medium" scope="col">
                   Created
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-border divide-y">
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className="divide-border divide-y">
               {data.accounts.map((account) => (
-                <tr key={account.id}>
-                  <td className="px-4 py-3 font-medium">
+                <TableRow key={account.id}>
+                  <TableCell className="px-4 py-3 font-medium">
                     {account.display_name}
-                  </td>
-                  <td className="text-muted-foreground px-4 py-3">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground px-4 py-3">
                     {account.email}
-                  </td>
-                  <td className="px-4 py-3">{account.role}</td>
-                  <td className="px-4 py-3">{account.status}</td>
-                  <td className="text-muted-foreground px-4 py-3">
+                  </TableCell>
+                  <TableCell className="px-4 py-3">{account.role}</TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Badge
+                      className={statusBadgeClassName[account.status]}
+                      variant="outline"
+                    >
+                      {account.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground px-4 py-3">
                     {dateFormatter.format(new Date(account.created_at))}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
           {data.accounts.length === 0 ? (
             <p className="text-muted-foreground px-4 py-10 text-center text-sm">
               {searchState.search
@@ -132,30 +205,37 @@ export const StaffAccountsPage = () => {
             </p>
             <label className="text-muted-foreground flex items-center gap-2 text-sm">
               Rows
-              <select
-                className="border-border bg-background text-foreground h-9 rounded-lg border px-2"
-                onChange={(event) =>
+              <Select
+                onValueChange={(value) =>
                   navigate({
                     search: (previous) => ({
                       ...previous,
                       page: 1,
-                      page_size: Number(event.target.value),
+                      page_size: Number(value),
                     }),
                   })
                 }
-                value={searchState.page_size}
+                value={String(searchState.page_size)}
               >
-                {[10, 20, 50, 100].map((size) => (
-                  <option key={size} value={size}>
-                    {size}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  aria-label="Rows per page"
+                  className="border-border bg-background h-9 rounded-lg px-2"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[10, 20, 50, 100].map((size) => (
+                    <SelectItem key={size} value={String(size)}>
+                      {size}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </label>
           </div>
           <div className="flex gap-2">
-            <button
-              className="border-border hover:bg-muted h-9 rounded-lg border px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            <Button
+              className="h-9 rounded-lg px-3 text-sm"
               disabled={searchState.page <= 1 || accountsQuery.isFetching}
               onClick={() =>
                 navigate({
@@ -165,12 +245,12 @@ export const StaffAccountsPage = () => {
                   }),
                 })
               }
-              type="button"
+              variant="outline"
             >
               Previous
-            </button>
-            <button
-              className="border-border hover:bg-muted h-9 rounded-lg border px-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+            </Button>
+            <Button
+              className="h-9 rounded-lg px-3 text-sm"
               disabled={!data.has_more || accountsQuery.isFetching}
               onClick={() =>
                 navigate({
@@ -180,10 +260,10 @@ export const StaffAccountsPage = () => {
                   }),
                 })
               }
-              type="button"
+              variant="outline"
             >
               Next
-            </button>
+            </Button>
           </div>
         </nav>
       </>
@@ -203,8 +283,8 @@ export const StaffAccountsPage = () => {
         </div>
         <div className="flex items-center gap-3">
           <ThemeToggle />
-          <button
-            className="border-border hover:bg-muted inline-flex h-10 items-center gap-2 rounded-lg border px-4 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60"
+          <Button
+            className="h-10 rounded-lg px-4 text-sm font-medium"
             disabled={logoutMutation.isPending}
             onClick={async () => {
               try {
@@ -215,21 +295,25 @@ export const StaffAccountsPage = () => {
                 // The mutation reports request failures through Sonner.
               }
             }}
-            type="button"
+            variant="outline"
           >
             <LogOut aria-hidden="true" className="size-4" />
             {logoutMutation.isPending ? "Signing out…" : "Sign out"}
-          </button>
+          </Button>
         </div>
       </header>
 
       {isForbidden ? (
-        <section className="border-border mt-8 rounded-xl border p-6">
-          <h2 className="font-semibold">Manager access required</h2>
-          <p className="text-muted-foreground mt-2 text-sm">
-            You are signed in, but your staff role cannot view this directory.
-          </p>
-        </section>
+        <Card className="border-border bg-card mt-8 rounded-xl border p-6 shadow-none ring-0">
+          <CardHeader className="gap-2 p-0">
+            <CardTitle className="font-semibold">
+              Manager access required
+            </CardTitle>
+            <CardDescription className="text-muted-foreground mt-0 text-sm">
+              You are signed in, but your staff role cannot view this directory.
+            </CardDescription>
+          </CardHeader>
+        </Card>
       ) : (
         <>
           <div className="mt-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">

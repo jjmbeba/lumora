@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import type { components } from "@/api/generated";
 import { ApiError, apiRequest } from "@/lib/api";
@@ -14,6 +14,7 @@ export interface StaffAccountSearch {
 export const useStaffAccountsQuery = (params: StaffAccountSearch) =>
   useQuery({
     queryKey: ["staff", "accounts", params],
+    placeholderData: keepPreviousData,
     queryFn: () => {
       const query = new URLSearchParams({
         page: String(params.page),
